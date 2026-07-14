@@ -1,0 +1,2399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NICo Emulator — Site-Local NICo Control Plane</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1722'/%3E%3Crect x='3' y='3' width='10' height='4' rx='1' fill='%2376b900'/%3E%3Crect x='3' y='9' width='10' height='4' rx='1' fill='%2376b900'/%3E%3C/svg%3E">
+
+<style>
+  :root{
+    --bg:#0f1722; --card:#16202e; --line:#223142; --green:#76b900;
+    --text:#e6edf3; --muted:#8aa0b4; --amber:#e8c66a; --red:#f0a3b0;
+    --mono:"Menlo","SFMono-Regular",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.5}
+  a{color:var(--green);text-decoration:none}
+  header{border-bottom:1px solid var(--line);padding:16px 22px;
+    display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  header .title{font-size:18px;font-weight:600}
+  header .title .accent{color:var(--green)}
+  header .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  .hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .ghlink{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);
+    font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;
+    color:var(--soft);text-decoration:none}
+  .ghlink:hover{border-color:var(--green);color:var(--green-text)}
+  .ghlink .ghico{color:var(--amber)}
+  .pill{font-family:var(--mono);font-size:12px;padding:4px 10px;border:1px solid var(--line);
+    border-radius:14px;color:var(--muted)}
+  .pill.ok{color:var(--green);border-color:#2c4a12}
+  .pill.bad{color:var(--red);border-color:#4a2530}
+  /* nav tabs */
+  nav.tabs{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid var(--line);
+    flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:5}
+  nav.tabs button{background:transparent;color:var(--muted);border:none;
+    border-bottom:2px solid transparent;border-radius:0;padding:12px 16px;
+    font-weight:600;font-size:13px;cursor:pointer}
+  nav.tabs button:hover{color:var(--text);filter:none}
+  nav.tabs button.active{color:var(--green);border-bottom-color:var(--green)}
+  nav.tabs button.primary{color:var(--text)}
+  nav.tabs button.primary.active{color:var(--green)}
+  nav.tabs button .badge{margin-left:6px}
+  main{padding:20px 22px;max-width:1400px;margin:0 auto}
+  section.view{display:none}
+  section.view.active{display:block}
+  .sub-sec{margin-bottom:26px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+    font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  h2 .count{font-family:var(--mono);color:var(--text);background:var(--card);
+    border:1px solid var(--line);border-radius:10px;padding:1px 8px;font-size:11px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  /* stat strips */
+  .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .stat .v{font-family:var(--mono);font-size:22px;font-weight:600;margin-top:4px}
+  .stat .v.green{color:var(--green)}
+  .stat .v.small{font-size:15px}
+  /* ── Site Controllers: NICo instance cards ── */
+  .instances{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:980px){.instances{grid-template-columns:1fr}}
+  .inst{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .inst.healthy{border-color:#2c4a12}
+  .inst.degraded{border-color:#4a4020}
+  .inst.critical{border-color:#4a2530}
+  .inst .ihead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .inst .iid{font-family:var(--mono);font-size:17px;font-weight:700;color:var(--green);
+    display:flex;align-items:center;gap:9px}
+  .inst .isite{color:var(--text);font-size:13px;margin-top:3px}
+  .inst .isite .rgn{color:var(--muted)}
+  .inst .ista{font-family:var(--mono);font-size:11px;text-align:right;color:var(--muted)}
+  .inst .ista .v{color:var(--text)}
+  .inst .iha{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7}
+  .inst .iha b{color:var(--text);font-weight:600}
+  .inst h3{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+    margin:16px 0 6px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline}
+  .inst h3 .r{font-family:var(--mono);color:var(--muted);text-transform:none;letter-spacing:0}
+  .fleet{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .fleet .fx{background:#101a26;border:1px solid var(--line);border-radius:8px;padding:8px 6px;text-align:center}
+  .fleet .fx .k{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.03em}
+  .fleet .fx .v{font-family:var(--mono);font-size:18px;font-weight:600;margin-top:2px}
+  .fleet .fx .v.green{color:var(--green)}
+  .breakdown{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+  .suchip{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:9px;
+    border:1px solid var(--line);color:var(--muted)}
+  .suchip b{color:var(--text)}
+  .suchip.on{color:var(--green);border-color:#2c4a12}
+  .suchip.off{color:var(--muted)}
+  .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  @media(max-width:560px){.svc-grid{grid-template-columns:1fr}}
+  .svc{display:flex;gap:8px;align-items:flex-start;padding:6px 9px;border:1px solid var(--line);
+    border-radius:7px;background:#0e1620}
+  .svc .sd{margin-top:4px}
+  .svc .sname{font-size:11px;font-weight:600;color:var(--text)}
+  .svc .scomp{font-family:var(--mono);font-size:9.5px;color:var(--green)}
+  .svc .sdetail{color:var(--muted);font-size:10px;margin-top:1px}
+  .xnote{margin-top:16px;padding:11px 14px;border:1px dashed var(--line);border-radius:8px;
+    color:var(--muted);font-size:12px}
+  .xnote b{color:var(--amber);font-weight:600}
+  .site-detail{margin-top:16px;background:var(--card);border:1px solid var(--green);
+    border-radius:12px;padding:18px}
+  /* ── rack tiles (cluster) ── */
+  .su-block{margin-bottom:16px}
+  .su-block .suh{display:flex;gap:10px;align-items:baseline;margin-bottom:8px;flex-wrap:wrap}
+  .su-block .suh .sut{font-weight:600;font-family:var(--mono);color:var(--text)}
+  .su-block .suh .sum{color:var(--muted);font-size:11px}
+  .rack-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px}
+  .rtile{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    aspect-ratio:1;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-family:var(--mono);
+    background:#101a26;transition:border-color .15s,transform .1s}
+  .rtile:hover{border-color:#33506e;transform:translateY(-1px)}
+  .rtile.ready{background:#0e2012;border-color:#254019}
+  .rtile.attention{background:#241f0e;border-color:#4a4020}
+  .rtile.degraded{background:#240e15;border-color:#4a2530}
+  .rtile .rn{color:var(--text);font-weight:700;font-size:12px}
+  .rtile .rg{color:var(--muted);font-size:9px}
+  .rtile .tdot{position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;
+    background:var(--green);box-shadow:0 0 0 2px #101a26}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-bottom:12px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;border:1px solid var(--line)}
+  .legend .sw.ready{background:#0e2012;border-color:#254019}
+  .legend .sw.attention{background:#241f0e;border-color:#4a4020}
+  .legend .sw.degraded{background:#240e15;border-color:#4a2530}
+  .legend .sw.off{background:#161c23;border-color:#2a3542}
+  .legend .sw.cord{background:repeating-linear-gradient(45deg,#101a26 0 4px,rgba(240,163,176,.45) 4px 6px)}
+  .legend .sw.capped{background:#101a26;border-bottom:3px solid #5aa7e8}
+  .legend .sw.mixed{background:#101a26;border-color:var(--amber)}
+  /* rack control-state tile overlays (obs) */
+  .rtile.off{background:#161c23;border-color:#2a3542}
+  .rtile.off .rn{color:var(--muted)}
+  .rtile.off .rg{color:var(--muted);font-weight:700}
+  .rtile.mixed{border-color:var(--amber)}
+  .rtile.capped{border-bottom:3px solid #5aa7e8}
+  .rtile.cord::after{content:"";position:absolute;inset:0;border-radius:6px;pointer-events:none;
+    background:repeating-linear-gradient(45deg,transparent 0 7px,rgba(240,163,176,.16) 7px 10px)}
+  .rtile .cmark{position:absolute;top:0;left:4px;color:var(--red);font-size:10px;line-height:1.4}
+  /* rack control bars (cluster bulk + single rack) */
+  .ctrl-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:9px}
+  .ctrl-row:last-child{margin-bottom:0}
+  .ctrl-row select,.ctrl-row input{background:var(--bg);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:12px}
+  .ctrl-row input{width:92px}
+  .ctrl-row .lbl{color:var(--muted);font-size:12px}
+  button.dgr{background:transparent;color:var(--red);border:1px solid #4a2530}
+  button.armed,button.ghost.armed,button.dgr.armed{background:var(--amber);color:#241f0e;border-color:var(--amber)}
+  .ctl-warn{color:var(--amber);font-size:12px;font-family:var(--mono)}
+  /* dpu grid */
+  .dpu{cursor:pointer;transition:border-color .15s}
+  .dpu:hover{border-color:#33506e}
+  .dpu.sel{border-color:var(--green);box-shadow:0 0 0 1px var(--green) inset}
+  .dpu .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .dpu .id{font-family:var(--mono);font-size:12px;color:var(--text)}
+  .dpu .meta{color:var(--muted);font-size:11px;margin-top:6px;display:flex;
+    justify-content:space-between;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .dot.ok{background:var(--green)} .dot.warning{background:var(--amber)}
+  .dot.critical{background:var(--red)} .dot.unknown{background:var(--muted)}
+  .dot.pon{background:var(--green)} .dot.ppending{background:var(--amber)}
+  .dot.poff{background:#4a5a6a}
+  .chips{margin-top:9px;display:flex;flex-wrap:wrap;gap:5px}
+  .chip{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:9px;
+    background:#0e2a12;color:var(--green);border:1px solid #2c4a12}
+  .chip.none{background:transparent;color:var(--muted);border-color:var(--line)}
+  /* badges */
+  .badge{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:9px;
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .badge.ready{color:var(--green);border-color:#2c4a12}
+  .badge.provisioning{color:var(--amber);border-color:#4a4020}
+  .badge.degraded{color:var(--red);border-color:#4a2530}
+  .badge.discovered{color:var(--muted)}
+  /* rack detail (tray rows) */
+  .rackbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .rackbar select{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:6px 10px;font-family:var(--mono);font-size:12px}
+  .rack{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  @media(max-width:720px){.rack{grid-template-columns:1fr}}
+  .tray{display:flex;align-items:center;gap:11px;background:var(--card);
+    border:1px solid var(--line);border-radius:8px;padding:9px 12px;cursor:pointer;
+    transition:border-color .15s}
+  .tray:hover{border-color:#33506e}
+  .tray.sel{border-color:var(--green);box-shadow:0 0 0 1px var(--green) inset}
+  .tray .tnum{font-family:var(--mono);color:var(--muted);font-size:12px;width:22px;flex:0 0 auto}
+  .tray .grow{flex:1;min-width:0}
+  .tray .tname{font-family:var(--mono);font-size:12px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .tray .tsub{color:var(--muted);font-size:10px;font-family:var(--mono);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .tray .tgpu{font-family:var(--mono);font-size:11px;color:var(--muted);flex:0 0 auto}
+  .detail{margin-top:14px;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:16px}
+  .detail .dh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .detail .dh .id{font-family:var(--mono);color:var(--green);font-size:14px}
+  .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px 18px}
+  .kv .kvi{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);
+    padding:5px 0;font-family:var(--mono);font-size:12px}
+  .kv .kvi .kk{color:var(--muted)}
+  .kv .kvi .vv{color:var(--text);text-align:right;word-break:break-all}
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:10px;letter-spacing:.05em}
+  td.num{text-align:right;color:var(--text)}
+  td.num.hot{color:var(--amber)}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  .tbl-wrap table{min-width:520px}
+  .tele-head{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+  .tele-head .id{font-family:var(--mono);color:var(--green)}
+  .hint{color:var(--muted);font-size:12px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  /* boot stage pipeline */
+  .pipe{display:inline-flex;gap:4px;align-items:center;vertical-align:middle}
+  .pstep{width:20px;height:6px;border-radius:3px;background:var(--line);display:inline-block}
+  .pstep.done{background:var(--green)}
+  .pstep.cur{background:var(--amber);animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .stage-txt{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:8px}
+  /* scenarios */
+  .scenario{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:14px;margin-bottom:10px}
+  .scenario .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .scenario .name{font-weight:600}
+  .scenario .desc{color:var(--muted);font-size:12px;margin-top:4px;max-width:70ch}
+  .sev{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:9px;
+    text-transform:uppercase;border:1px solid var(--line);color:var(--muted)}
+  .sev.critical{color:var(--red);border-color:#4a2530}
+  .sev.warning{color:var(--amber);border-color:#4a4020}
+  button{background:var(--green);color:#0a1206;border:none;border-radius:8px;
+    padding:8px 16px;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+  button:hover{filter:brightness(1.08)}
+  button:disabled{opacity:.5;cursor:default}
+  button.sm{padding:5px 12px;font-size:12px}
+  button.ghost{background:transparent;color:var(--green);border:1px solid #2c4a12}
+  .result{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;display:none}
+  .result.show{display:block}
+  .verdict{font-family:var(--mono);font-size:12px;font-weight:600;padding:3px 10px;
+    border-radius:9px;display:inline-block}
+  .verdict.pass{background:#0e2a12;color:var(--green);border:1px solid #2c4a12}
+  .verdict.fail{background:#2a0e15;color:var(--red);border:1px solid #4a2530}
+  .assert{font-family:var(--mono);font-size:12px;padding:3px 0;color:var(--muted);
+    display:flex;gap:8px}
+  .assert .mk{width:14px;flex:0 0 auto}
+  .assert.ok .mk{color:var(--green)} .assert.no .mk{color:var(--red)}
+  .assert.ok{color:var(--text)} .assert.no{color:var(--red)}
+  .delta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:8px}
+  .delta b{color:var(--amber);font-weight:600}
+  /* events */
+  .events{font-family:var(--mono);font-size:12px}
+  .ev{display:flex;gap:12px;padding:5px 0;border-bottom:1px solid var(--line)}
+  .ev .sev{flex:0 0 auto;width:64px;text-align:center}
+  .ev .msg{color:var(--text);word-break:break-word}
+  .ev .args{color:var(--muted)}
+  footer{color:var(--muted);font-size:11px;padding:16px 22px;border-top:1px solid var(--line);
+    font-family:var(--mono)}
+  /* filter bar inputs (provisioning) */
+  .rackbar input{background:var(--card);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:12px;min-width:190px}
+  .rackbar input::placeholder{color:var(--muted)}
+  #prov-table tr[data-row]{cursor:pointer}
+  #prov-table tr[data-row]:hover td{background:#1a2635}
+  /* ── modals ── */
+  .mbk{position:fixed;inset:0;background:rgba(4,9,15,.66);z-index:60;display:none;
+    align-items:flex-start;justify-content:center;padding:4vh 16px;overflow-y:auto}
+  .mbk.open{display:flex}
+  .modal{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    width:100%;max-width:900px;box-shadow:0 18px 60px rgba(0,0,0,.55)}
+  .modal.wide{max-width:1280px}
+  .mhead{display:flex;align-items:center;gap:10px;padding:13px 18px;
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .mhead .mid{font-family:var(--mono);color:var(--green);font-size:14px;font-weight:700}
+  .mhead select{background:var(--bg);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:5px 9px;font-family:var(--mono);font-size:12px}
+  .mhead button.x{margin-left:auto;background:transparent;border:1px solid var(--line);
+    color:var(--muted);border-radius:7px;padding:4px 12px;font-size:12px;font-weight:600}
+  .mhead button.x:hover{color:var(--text);border-color:#33506e;filter:none}
+  .mbody{padding:16px 18px;max-height:78vh;overflow:auto}
+  .mact{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}
+  .mact .hint{font-family:var(--mono)}
+  /* vertical boot stepper */
+  .vsteps{display:flex;flex-direction:column}
+  .vstep{display:flex;gap:12px;position:relative;padding:0 0 18px 0}
+  .vstep::before{content:"";position:absolute;left:8px;top:20px;bottom:0;width:2px;
+    background:var(--line)}
+  .vstep:last-child{padding-bottom:0}
+  .vstep:last-child::before{display:none}
+  .vstep .sdot{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);
+    background:#101a26;flex:0 0 auto;margin-top:1px;z-index:1}
+  .vstep.done .sdot{background:var(--green);border-color:var(--green)}
+  .vstep.done::before{background:#2c4a12}
+  .vstep.cur .sdot{border-color:var(--amber);background:#241f0e;
+    animation:pulse 1.2s ease-in-out infinite}
+  .vstep .sl{font-size:12.5px;font-weight:600;color:var(--muted)}
+  .vstep.done .sl,.vstep.cur .sl{color:var(--text)}
+  .vstep.cur .sl{color:var(--amber)}
+  .vstep .sm2{font-size:11px;color:var(--muted);margin-top:2px}
+  .vstep .stag{font-family:var(--mono);font-size:10px;margin-left:8px;color:var(--muted)}
+  .vstep.done .stag{color:var(--green)}
+  .vstep.cur .stag{color:var(--amber)}
+  /* fabric site cards */
+  #fabric-sites .fleet{grid-template-columns:repeat(6,1fr)}
+  @media(max-width:720px){#fabric-sites .fleet{grid-template-columns:repeat(3,1fr)}}
+  .topo-legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;color:var(--muted);
+    font-size:11px;font-family:var(--mono);margin-bottom:10px}
+  .topo-legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;
+    vertical-align:-1px;margin-right:5px;border:1px solid var(--line)}
+  .topo-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;
+    background:#0d141d;padding:10px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="title">NICo Emulator <span class="accent">— Site-Local NICo Control Plane</span></div>
+    <div class="sub" id="sub">Per-site NICo instances · NICo Core + REST + Temporal + site-agent + Rack/Machine controllers · Vera Rubin NVL72 twin</div>
+  </div>
+  <div id="health"><span class="pill">connecting…</span></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-sec="sites" class="primary active">Site Controllers</button>
+  <button data-sec="cluster">Twin Control</button>
+  <button data-sec="rack">Rack</button>
+  <button data-sec="fabric">Fabric</button>
+  <button data-sec="storage">Storage</button>
+  <button data-sec="dpus">DPUs</button>
+  <button data-sec="provisioning">Provisioning</button>
+  <button data-sec="scenarios">Scenarios</button>
+</nav>
+
+<main>
+  <!-- SITE CONTROLLERS (primary) -->
+  <section class="view active" id="view-sites">
+    <div class="sub-sec">
+      <h2>NICo Instances <span class="count" id="sites-count">0</span>
+        <span class="hint">— one site-local NICo control-plane instance per site (independent)</span></h2>
+      <div class="instances" id="instances"></div>
+      <div class="xnote" id="xnote"></div>
+      <div id="site-detail"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Reference Twin <span class="hint">— Vera Rubin NVL72 rack model (shared hardware template)</span></h2>
+      <div class="stats" id="twin"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Recent Control-Plane Events <span class="count" id="ev-count">0</span></h2>
+      <div class="events" id="events"></div>
+    </div>
+  </section>
+
+  <!-- CLUSTER / TWIN CONTROL -->
+  <section class="view" id="view-cluster">
+    <div class="sub-sec">
+      <h2 style="font-size:15px">NVIDIA Vera Rubin NVL72 — Digital Twin Control
+        <span class="hint">— 전체 클러스터 140랙 설정·제어 (power / cap / workload / cordon) · 실텔레메트리 반영</span></h2>
+    </div>
+    <div class="sub-sec">
+      <h2>전체 랙 제어 — 데모 <span class="hint">— 범위 일괄 제어 (power / cap / workload / cordon) · 1차 클릭 후 3초 내 재클릭으로 실행 (2단계 확인)</span></h2>
+      <div id="cluster-ctl" class="card"><div class="hint">loading…</div></div>
+    </div>
+    <div class="sub-sec">
+      <h2>적용된 랙 설정 <span class="count" id="ctlset-count">0</span>
+        <span class="hint">— 기본값(on · uncap · steady · uncordon)과 다른 랙 · 행별 즉시 해제</span></h2>
+      <div class="tbl-wrap"><table id="ctlset-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Cluster Fleet <span class="hint">— all racks across both NICo sites · click a rack to drill into its 18 trays</span></h2>
+      <div class="stats" id="cluster-stats"></div>
+      <div class="breakdown" id="cluster-obs-chips" style="margin-top:10px"></div>
+    </div>
+    <div class="sub-sec">
+      <div class="legend">
+        <span><span class="sw ready"></span> ready</span>
+        <span><span class="sw attention"></span> attention</span>
+        <span><span class="sw degraded"></span> degraded</span>
+        <span><span class="sw off"></span> power OFF</span>
+        <span><span class="sw cord"></span> cordoned ⊘</span>
+        <span><span class="sw capped"></span> power cap</span>
+        <span><span class="sw mixed"></span> restart(mixed)</span>
+        <span><span class="dot ok" style="width:8px;height:8px"></span> tenant attached</span>
+      </div>
+      <div id="cluster-racks"></div>
+    </div>
+  </section>
+
+  <!-- RACK -->
+  <section class="view" id="view-rack">
+    <div class="sub-sec">
+      <div id="rack-picker"></div>
+      <div id="rack-ctl" style="margin-bottom:14px"></div>
+      <h2>Rack Compute Trays <span class="count" id="rack-count">0</span>
+        <span class="hint">— click a tray for Redfish + provisioning detail</span></h2>
+      <div class="rack" id="rack"></div>
+      <div id="rack-detail"></div>
+    </div>
+  </section>
+
+  <!-- FABRIC -->
+  <section class="view" id="view-fabric">
+    <div class="sub-sec">
+      <h2>Site Fabrics <span class="count" id="fsite-count">0</span>
+        <span class="hint">— 사이트별 독립 패브릭 · "토폴로지 구성 뷰" 클릭 → 듀얼 Fabric-A/B IB 토폴로지 팝업</span></h2>
+      <div class="instances" id="fabric-sites"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Cluster Fabric Summary <span class="hint">— 클러스터 공통</span></h2>
+      <div class="stats" id="fabric-summary"></div>
+      <div id="nvlink-card" style="margin-top:12px"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>InfiniBand P_Key Partitions <span class="count" id="ib-count">0</span></h2>
+      <div class="tbl-wrap"><table id="ib-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Ethernet VXLAN Segments <span class="count" id="eth-count">0</span></h2>
+      <div class="tbl-wrap"><table id="eth-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Switch Inventory <span class="count" id="sw-count">0</span></h2>
+      <div class="tbl-wrap"><table id="sw-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>UFM — InfiniBand <span class="count" id="ufm-count">0</span>
+        <span class="hint" id="ufm-health">— Quantum-X800 개별 스위치 · UFM Enterprise 에뮬레이션</span>
+        <span class="hint">· 행별 장애 주입 — 데모 (1차 클릭 후 3초 내 재클릭)</span>
+        <span class="ctl-warn" id="ufm-warn"></span></h2>
+      <div class="tbl-wrap"><table id="ufm-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>NetQ — Ethernet <span class="count" id="netq-count">0</span>
+        <span class="hint" id="netq-val">— Spectrum-X SN5600 · NetQ validation</span>
+        <span class="hint">· 행별 장애 주입 — 데모</span>
+        <span class="ctl-warn" id="netq-warn"></span></h2>
+      <div class="tbl-wrap"><table id="netq-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Converged Network <span class="count" id="conv-count">0</span>
+        <span class="hint">— 스토리지·관리 N-S converged rail · CX-9 dual-port + BF-4 · Spectrum-X storage fabric · 사이트별 장애 주입 — 데모</span>
+        <span class="ctl-warn" id="conv-warn"></span></h2>
+      <div class="stats" id="conv-stats"></div>
+      <div class="tbl-wrap" style="margin-top:10px"><table id="conv-table"></table></div>
+    </div>
+  </section>
+
+  <!-- STORAGE (VAST Data) -->
+  <section class="view" id="view-storage">
+    <div class="sub-sec">
+      <h2>VAST Clusters <span class="count" id="vast-count">0</span>
+        <span class="hint">— 사이트별 AI Storage 1식 · DASE(CBox/DBox) · VMS 에뮬레이션 · 카드별 장애 주입 — 데모</span>
+        <span class="ctl-warn" id="vast-warn"></span></h2>
+      <div class="instances" id="vast-clusters"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Tenant Views <span class="count" id="vv-count">0</span>
+        <span class="hint">— NFS/S3 export · 테넌트 attachment 파생 · quota/QoS</span></h2>
+      <div class="tbl-wrap"><table id="vv-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Performance <span class="count" id="vp-count">0</span>
+        <span class="hint">— 클러스터·뷰 롤업 · 체크포인트 write burst 반영</span></h2>
+      <div class="tbl-wrap"><table id="vp-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Storage Alarms <span class="count" id="va-count">0</span></h2>
+      <div class="events" id="va-list"></div>
+    </div>
+  </section>
+
+  <!-- DPUs -->
+  <section class="view" id="view-dpus">
+    <div class="sub-sec">
+      <div id="dpu-picker"></div>
+      <h2>DPUs <span class="count" id="dpu-count">0</span>
+        <span class="hint">— click a card to drill into telemetry, functions &amp; policy</span></h2>
+      <div class="cards" id="dpus"></div>
+    </div>
+    <div class="sub-sec">
+      <h2>Selected DPU Detail</h2>
+      <div class="tele-head" id="tele-head">
+        <span class="hint">Select a DPU above to view its isolation counters, functions and failure policy.</span>
+      </div>
+      <div id="dpu-detail"></div>
+    </div>
+  </section>
+
+  <!-- PROVISIONING -->
+  <section class="view" id="view-provisioning">
+    <div class="sub-sec">
+      <div id="prov-picker"></div>
+      <h2>Boot / Provisioning State <span class="count" id="prov-count">0</span>
+        <span class="hint">— PXE → DHCP → iPXE → OS → Host Agent · 행 클릭 → DPU 기반 IP 할당·OS 설치 상세 팝업 · buttons drive the boot state machine (writes)</span></h2>
+      <div class="tbl-wrap"><table id="prov-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>DHCP Leases <span class="count" id="lease-count">0</span></h2>
+      <div class="tbl-wrap"><table id="lease-table"></table></div>
+    </div>
+    <div class="sub-sec">
+      <h2>트레이 작업 — 재기동 · HW 교체 <span class="count" id="tops-count">0</span>
+        <span class="hint">— tick(2.5s)당 1단계 · tenant rejoin · KPI(MTTR) · 트레이 팝업에서 실행 — 데모</span></h2>
+      <div class="breakdown" id="tops-kpi" style="margin-bottom:10px"></div>
+      <div id="tops-inflight"></div>
+      <div class="tbl-wrap" style="margin-top:10px"><table id="tops-history"></table></div>
+    </div>
+  </section>
+
+  <!-- SCENARIOS -->
+  <section class="view" id="view-scenarios">
+    <div class="sub-sec">
+      <h2>Fault Scenarios <span class="count" id="scn-count">0</span>
+        <span class="hint">— runs against the selected DPU (pick one in the DPUs tab)</span></h2>
+      <div id="scenarios"></div>
+    </div>
+  </section>
+</main>
+
+<!-- Tray provisioning detail popup -->
+<div class="mbk" id="modal-tray">
+  <div class="modal">
+    <div class="mhead">
+      <span class="mid" id="tm-title">tray</span>
+      <span id="tm-badges"></span>
+      <button class="x" data-close="modal-tray">닫기 ✕</button>
+    </div>
+    <div class="mbody" id="tm-body"><div class="hint">loading…</div></div>
+  </div>
+</div>
+
+<!-- IB fabric topology popup -->
+<div class="mbk" id="modal-topo">
+  <div class="modal wide">
+    <div class="mhead">
+      <span class="mid">IB 패브릭 토폴로지 구성 뷰 — 듀얼 네트워크 Fabric-A/B</span>
+      <span id="tp-ctl"></span>
+      <button class="x" data-close="modal-topo">닫기 ✕</button>
+    </div>
+    <div class="mbody" id="tp-body"><div class="hint">loading…</div></div>
+  </div>
+</div>
+
+<footer id="footer">polling every 4s…</footer>
+
+<script>
+"use strict";
+const $ = (id)=>document.getElementById(id);
+let activeSection = "sites";
+let selectedDpu = null;
+let selectedTray = null;
+let selectedRack = null;      // rack_id for Rack / Provisioning / DPUs views
+let openSite = null;          // site_id whose detail panel is expanded
+let scenariosLoaded = false;
+let RACKS = [];               // cached [{rack_id,su_id,site_id,site}] for pickers
+const busy = {};              // scenario name -> running
+const provBusy = {};          // tray_id -> provisioning walk running
+// provisioning filter/search state + cached rows for re-render without refetch
+let provSite = "", provSu = "", provQuery = "";
+let provTrays = [], provLeases = [];
+let trayModalId = null;       // tray whose detail popup is open
+// fabric topology popup state
+let FABRIC_TOPO = null;
+let topoSite = null, topoPlane = "both";
+const PALETTE = ["#76b900","#5aa7e8","#e8c66a","#b48ce8","#f0a3b0",
+                 "#5ad0c8","#e88a5a","#9fd05a"];
+window.__trayById = {};       // redfish system cache keyed by tray Id
+
+const BOOT_SEQ = ["PXE Selected","DHCP Lease","iPXE Script Fetch","OS Boot","Host Agent Ready"];
+
+const ISO_KEYS = [
+  "dpu_intertenant_drops_total","dpu_spoof_drops_total","dpu_default_deny_drops_total",
+  "dpu_acl_drops_total","dpu_vlan_violation_drops_total","dpu_vni_violation_drops_total",
+  "dpu_policy_apply_failures_total","dpu_ipsec_auth_failures_total",
+  "dpu_flow_entries","dpu_flow_entry_packets_total","dpu_flow_entry_drops_total",
+  "dpu_policy_generation","dpu_last_known_good_generation","dpu_arm_up","dpu_up"
+];
+
+async function getJSON(url, opts){
+  const r = await fetch(url, opts);
+  if(!r.ok) throw new Error(url+" -> "+r.status);
+  return r.json();
+}
+const esc = (s)=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+const trayShort = (id)=>{const m=String(id).match(/tray-\d+.*/);return m?m[0]:String(id);};
+const trayNum = (id)=>{const m=String(id).match(/tray-(\d+)/);return m?m[1]:String(id);};
+const dpuTail = (id)=>{const m=String(id).match(/dpu-\d+/);return m?m[0]:String(id);};
+const rackNum = (id)=>{const m=String(id).match(/rack-(\d+)/);return m?m[1]:String(id);};
+const powerCls = (ps)=>ps==="On"?"pon":ps==="PoweringOn"?"ppending":"poff";
+const healthCls = (h)=>{const c=String(h||"").toLowerCase();
+  return ["ok","warning","critical"].includes(c)?c:"unknown";};
+const statusDot = (s)=>{const c=String(s||"").toLowerCase();
+  return ["ok","warning","critical"].includes(c)?c:"unknown";};
+const siteDot = (s)=>({healthy:"ok",degraded:"warning",critical:"critical"}[s]||"unknown");
+const lcCls = (s)=>{const c=String(s||"").toLowerCase();
+  return ["ready","provisioning","degraded","discovered"].includes(c)?c:"discovered";};
+
+// ── header ────────────────────────────────────────────────────────────
+async function loadHealth(){
+  try{
+    const h = await getJSON("/healthz");
+    const n = h.emulated_nico || {};
+    const gh = n.github ? `<a class="ghlink" href="${esc(n.github)}" target="_blank" `+
+      `rel="noopener" title="Upstream ${esc(n.repo||"NICo")} — the NICo this emulator reproduces">`+
+      `<span class="ghico">&#9733;</span>${esc(n.repo||"GitHub")}</a>` : "";
+    const emu = n.name ? `<span class="pill" title="${esc(n.note||"")}">`+
+      `emulating: ${esc(n.repo||n.name)} · ${esc(n.ref||"")}`+
+      `${n.as_of?" ("+esc(n.as_of)+")":""}</span>` : "";
+    $("health").innerHTML =
+      `<div class="hmeta">${gh}${emu}`+
+      `<span class="pill ok">● healthy · emulator v${esc(h.version)}</span></div>`;
+  }catch(e){
+    $("health").innerHTML = `<span class="pill bad">● unreachable</span>`;
+  }
+}
+
+async function loadTwin(){
+  try{
+    const t = await getJSON("/emulator/v1/twin");
+    const cells = [
+      ["Model", t.model, false, true],
+      ["Ref Rack", t.rack_id, false, true],
+      ["Compute Trays", t.compute_trays, false, false],
+      ["GPUs / rack", t.gpus, true, false],
+      ["DPUs / rack", t.dpus, false, false],
+    ];
+    $("twin").innerHTML = cells.map(([k,v,g,small])=>
+      `<div class="stat"><div class="k">${esc(k)}</div>`
+      + `<div class="v ${g?'green':''} ${small?'small':''}">${esc(v==null?'—':v)}</div></div>`
+    ).join("");
+  }catch(e){ $("twin").innerHTML = `<div class="hint">twin unavailable</div>`; }
+}
+
+// ── shared rack cache + picker ────────────────────────────────────────
+async function ensureRacks(){
+  if(RACKS.length) return RACKS;
+  try{
+    const [g,a] = await Promise.all([
+      getJSON("/emulator/v1/cluster/racks?site=gasan"),
+      getJSON("/emulator/v1/cluster/racks?site=ansan"),
+    ]);
+    RACKS = [...(g.racks||[]), ...(a.racks||[])];
+  }catch(e){ RACKS = []; }
+  if(!selectedRack && RACKS.length) selectedRack = RACKS[0].rack_id;
+  return RACKS;
+}
+
+async function buildRackPicker(elId){
+  const racks = await ensureRacks();
+  const el = $(elId);
+  if(!el) return;
+  if(!racks.length){ el.innerHTML = `<div class="hint">no racks available</div>`; return; }
+  const bySite = {};
+  racks.forEach(r=>{ (bySite[r.site_id]=bySite[r.site_id]||[]).push(r); });
+  let opts = "";
+  Object.entries(bySite).forEach(([sid,rs])=>{
+    opts += `<optgroup label="${esc(rs[0].site)} · ${esc(sid)}">`
+      + rs.map(r=>`<option value="${esc(r.rack_id)}" ${r.rack_id===selectedRack?"selected":""}>${esc(r.rack_id)}</option>`).join("")
+      + `</optgroup>`;
+  });
+  el.innerHTML = `<div class="rackbar"><span class="hint">Rack instance:</span>`
+    + `<select>${opts}</select>`
+    + `<span class="hint" id="${elId}-meta"></span></div>`;
+  const sel = el.querySelector("select");
+  sel.addEventListener("change",()=>{
+    selectedRack = sel.value; selectedTray = null; selectedDpu = null;
+    loadSection(activeSection);
+  });
+}
+
+// ── SITE CONTROLLERS ──────────────────────────────────────────────────
+function fleetHTML(fleet){
+  const f = fleet||{};
+  const boxes = [
+    ["Racks", f.racks, false], ["Hosts", f.trays, false],
+    ["GPU", f.gpus, true], ["DPU", f.dpus, false],
+    ["Tenants", (f.tenants||[]).length, false],
+  ];
+  const grid = `<div class="fleet">` + boxes.map(([k,v,g])=>
+    `<div class="fx"><div class="k">${esc(k)}</div><div class="v ${g?'green':''}">${esc(v==null?'—':v)}</div></div>`
+  ).join("") + `</div>`;
+  const lc = Object.entries(f.hosts_by_lifecycle||{}).map(([k,v])=>
+    `<span class="suchip"><b>${esc(v)}</b> ${esc(k)}</span>`).join("");
+  const pw = f.power||{};
+  const pwChips = `<span class="suchip on"><b>${esc(pw.On||0)}</b> power on</span>`
+    + (pw.PoweringOn ? `<span class="suchip"><b>${esc(pw.PoweringOn)}</b> powering</span>` : "")
+    + `<span class="suchip off"><b>${esc(pw.Off||0)}</b> off</span>`;
+  const dpuChips = (f.dpu_degraded||f.dpu_warning)
+    ? `<span class="suchip" style="color:var(--red);border-color:#4a2530"><b>${esc(f.dpu_degraded||0)}</b> dpu degraded</span>`
+      + `<span class="suchip" style="color:var(--amber);border-color:#4a4020"><b>${esc(f.dpu_warning||0)}</b> dpu warn</span>`
+    : "";
+  return grid + `<div class="breakdown">${lc}${pwChips}${dpuChips}</div>`;
+}
+
+function svcGridHTML(services){
+  const svc = services||[];
+  return `<div class="svc-grid">` + svc.map(s=>
+    `<div class="svc"><span class="dot ${statusDot(s.status)} sd" title="${esc(s.status)}"></span>`
+    + `<div><div class="sname">${esc(s.name)}</div>`
+    + `<div class="scomp">${esc(s.component)}</div>`
+    + `<div class="sdetail">${esc(s.detail)}</div></div></div>`
+  ).join("") + `</div>`;
+}
+
+function instanceCardHTML(s){
+  const f = s.fleet||{};
+  const sus = (f.sus||[]);
+  const suChips = sus.map(su=>`<span class="suchip">${esc(su)}</span>`).join("");
+  const okCls = statusDot(s.status==="healthy"?"ok":s.status==="degraded"?"warning":"critical");
+  return `<div class="inst ${esc(s.status)}">
+    <div class="ihead">
+      <div>
+        <div class="iid"><span class="dot ${siteDot(s.status)}"></span>${esc(s.nico_instance)}</div>
+        <div class="isite">${esc(s.site)} <span class="rgn">· ${esc(s.region)}</span></div>
+      </div>
+      <div class="ista">
+        <div><span class="v">${esc(s.status)}</span></div>
+        <div>v${esc(s.version)}</div>
+        <div>${esc(s.service_ok)}/${esc(s.service_total)} svc</div>
+      </div>
+    </div>
+    <div class="iha">
+      <div>HA: <b>${esc(s.ha_nodes)} nodes</b> · leader <b>${esc(s.leader)}</b></div>
+      <div>deploy: ${esc(s.deployment)}</div>
+    </div>
+
+    <h3>Managed Fleet <span class="r">${esc(f.racks)} racks · ${esc(f.trays)} hosts</span></h3>
+    ${fleetHTML(f)}
+
+    <h3>Scalable Units <span class="r">${esc(sus.length)} SU</span></h3>
+    <div class="breakdown">${suChips || '<span class="hint">none</span>'}</div>
+
+    <h3>Service Inventory <span class="r">${esc((s.services||[]).length)} services</span></h3>
+    ${svcGridHTML(s.services)}
+
+    <div style="margin-top:14px">
+      <button class="ghost sm" data-site="${esc(s.site_id)}">
+        ${openSite===s.site_id ? "Hide site detail ▲" : "View site detail →"}
+      </button>
+    </div>
+  </div>`;
+}
+
+async function loadSites(){
+  try{
+    const data = await getJSON("/emulator/v1/sites");
+    const sites = data.sites||[];
+    $("sites-count").textContent = sites.length;
+    $("instances").innerHTML = sites.map(instanceCardHTML).join("");
+    $("xnote").innerHTML = data.cross_site_note
+      ? `<b>Cross-site:</b> ${esc(data.cross_site_note)}`
+      : "";
+    document.querySelectorAll("#instances button[data-site]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const sid = b.getAttribute("data-site");
+        openSite = (openSite===sid) ? null : sid;
+        loadSites();
+      });
+    });
+    if(openSite){ await renderSiteDetail(openSite); }
+    else { $("site-detail").innerHTML = ""; }
+  }catch(e){ $("instances").innerHTML = `<div class="hint">sites unavailable</div>`; }
+  loadEvents();
+}
+
+async function renderSiteDetail(sid){
+  try{
+    const d = await getJSON("/emulator/v1/sites/"+encodeURIComponent(sid));
+    const sus = d.scalable_units||[];
+    const racks = d.racks||[];
+    const stateCount = {ready:0,attention:0,degraded:0};
+    racks.forEach(r=>{ const c = rackStateCls(r); stateCount[c]=(stateCount[c]||0)+1; });
+    const tenantRacks = racks.filter(r=>(r.tenants||[]).length);
+    const suRows = sus.map(su=>
+      `<tr><td>${esc(su.su_id)}</td><td class="num">${esc(su.racks)}</td>`
+      + `<td class="num">${esc(su.gpus)}</td>`
+      + `<td>${(su.tenants||[]).length?esc((su.tenants||[]).join(", ")):"—"}</td></tr>`
+    ).join("") || `<tr><td colspan="4" class="hint">no scalable units</td></tr>`;
+    const evs = d.recent_events||[];
+    const evHTML = evs.length ? evs.map(e=>{
+      const sev = (e.severity||"info");
+      const cls = sev==="critical"?"critical":sev==="warning"?"warning":"ok";
+      const args = (e.args&&e.args.length)?` <span class="args">[${esc(e.args.join(", "))}]</span>`:"";
+      return `<div class="ev"><span class="sev ${cls}">${esc(sev)}</span>`
+        + `<span class="msg">${esc(e.message_id)}${args}</span></div>`;
+    }).join("") : `<div class="hint">no recent events for this site</div>`;
+    $("site-detail").innerHTML = `<div class="site-detail">
+      <div class="ihead" style="margin-bottom:12px">
+        <div class="iid"><span class="dot ${siteDot(d.status)}"></span>${esc(d.nico_instance)} — site detail</div>
+        <button class="ghost sm" data-close="1">Close ▲</button>
+      </div>
+      <div class="breakdown" style="margin-bottom:12px">
+        <span class="suchip on"><b>${esc(stateCount.ready||0)}</b> ready</span>
+        <span class="suchip"><b>${esc(stateCount.attention||0)}</b> attention</span>
+        <span class="suchip"><b>${esc(stateCount.degraded||0)}</b> degraded</span>
+        <span class="suchip"><b>${esc(tenantRacks.length)}</b> racks w/ tenants</span>
+      </div>
+      <h2 style="margin-bottom:8px">Scalable Unit Roll-up</h2>
+      <div class="tbl-wrap" style="margin-bottom:14px"><table>
+        <tr><th>SU</th><th class="num">Racks</th><th class="num">GPUs</th><th>Tenants</th></tr>
+        ${suRows}
+      </table></div>
+      <h2 style="margin-bottom:8px">Recent Events <span class="count">${evs.length}</span></h2>
+      <div class="events">${evHTML}</div>
+    </div>`;
+    const cb = $("site-detail").querySelector("button[data-close]");
+    if(cb) cb.addEventListener("click",()=>{ openSite=null; loadSites(); });
+  }catch(e){ $("site-detail").innerHTML = `<div class="hint">site detail unavailable</div>`; }
+}
+
+// ── CLUSTER (rack tiles) ──────────────────────────────────────────────
+function rackStateCls(r){
+  const h = r.health||{};
+  if(r.state==="degraded" || (h.critical||0)>0) return "degraded";
+  if(r.state==="attention" || (h.warning||0)>0) return "attention";
+  return "ready";
+}
+
+// ── obs rack control state (power / cap / workload / cordon) ─────────
+let obsRacks = [];            // latest GET /emulator/v1/obs/racks
+let OBSMAP = {};              // rack_id -> obs rack
+let obsSummary = null;        // latest GET /emulator/v1/obs/summary
+const ARMED = {};             // 2단계 확인: akey -> timeout handle
+const WARN_TXT = "주의: 테넌트 워크로드 영향 — 해당 범위의 실행 중 워크로드가 중단될 수 있습니다. 3초 내 재클릭 시 즉시 실행됩니다.";
+
+async function loadObs(){
+  try{
+    const [rs, sm] = await Promise.all([
+      getJSON("/emulator/v1/obs/racks"),
+      getJSON("/emulator/v1/obs/summary"),
+    ]);
+    obsRacks = rs||[];
+    OBSMAP = {};
+    obsRacks.forEach(r=>{ OBSMAP[r.rack_id] = r; });
+    obsSummary = sm||null;
+  }catch(e){ /* keep last known obs state */ }
+}
+
+function disarmBtn(btn, warnEl){
+  const key = btn.dataset.akey;
+  if(ARMED[key]){ clearTimeout(ARMED[key]); delete ARMED[key]; }
+  btn.classList.remove("armed");
+  if(btn.dataset.label) btn.textContent = btn.dataset.label;
+  if(warnEl) warnEl.textContent = "";
+}
+function confirmThen(btn, warnEl, warnText, fn){
+  const key = btn.dataset.akey;
+  if(ARMED[key]){                       // 2차 클릭 (3초 내) → 실행
+    disarmBtn(btn, warnEl);
+    fn();
+    return;
+  }
+  if(!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = "확인 — 실행";
+  btn.classList.add("armed");
+  if(warnEl) warnEl.textContent = warnText||"";
+  ARMED[key] = setTimeout(()=>disarmBtn(btn, warnEl), 3000);
+}
+
+// ── 장비별 개별 장애 주입/복구 (데모) — UFM/NetQ/VAST/Converged 공통 ──
+const FAULT_WARN = "주의(데모): 장애 주입 — 해당 장비 텔레메트리·알림에 즉시 반영됩니다. 3초 내 재클릭 시 실행.";
+function faultBtn(api, kind, target, label, danger){
+  return `<button class="sm ${danger?"dgr":"ghost"}" data-fault="${esc(api)}"`
+    + ` data-kind="${esc(kind)}" data-target="${esc(target)}"`
+    + ` data-akey="f:${esc(api)}:${esc(kind)}:${esc(target)}">${esc(label)}</button>`;
+}
+function wireFaultBtns(rootSel, warnId, refresh){
+  document.querySelectorAll(rootSel+" button[data-fault]").forEach(b=>{
+    if(b.dataset.wired) return;
+    b.dataset.wired = "1";
+    b.addEventListener("click",()=>{
+      confirmThen(b, $(warnId), FAULT_WARN, ()=>execDeviceFault(
+        b.dataset.fault, b.dataset.kind, b.dataset.target, warnId, refresh));
+    });
+  });
+}
+async function execDeviceFault(api, kind, target, warnId, refresh){
+  const w = $(warnId);
+  try{
+    const path = kind==="recover" ? "recover" : "inject";
+    const body = kind==="recover" ? {target} : {kind, target};
+    const r = await getJSON(`/${api}/v1/faults/${path}`,
+      {method:"POST", headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)});
+    if(w) w.textContent = kind==="recover"
+      ? `복구 (데모): ${((r.recovered||[]).join(", "))||"대상 없음"}`
+      : `주입 (데모): ${kind} → ${r.target||target}`;
+  }catch(e){ if(w) w.textContent = "실패: "+e.message; }
+  if(refresh) refresh();          // 실행 직후 해당 테이블/카드 즉시 갱신
+  loadEvents();
+}
+
+function buildAction(act, capEl, capuEl, profEl){
+  if(act==="power_cap"){
+    const v = parseFloat(capEl && capEl.value);
+    if(!isFinite(v) || v<=0) return {err:"Power Cap 값을 먼저 입력하세요"};
+    return {action:"power_cap",
+      params: (capuEl&&capuEl.value)==="pct" ? {cap_pct:v} : {cap_kw:v}};
+  }
+  if(act==="workload")
+    return {action:"workload", params:{profile:(profEl&&profEl.value)||"steady"}};
+  if(act==="cordon")
+    return {action:"cordon", params:{reason:"dashboard demo control"}};
+  return {action:act};
+}
+
+function ctlButtonsHTML(pfx){
+  return `<button class="sm" data-act="power_on" data-akey="${pfx}:power_on">전원 On</button>
+    <button class="sm dgr" data-act="power_off" data-akey="${pfx}:power_off">전원 Off</button>
+    <button class="sm ghost" data-act="restart" data-akey="${pfx}:restart">재시작</button>
+    <button class="sm dgr" data-act="cordon" data-akey="${pfx}:cordon">Cordon</button>
+    <button class="sm ghost" data-act="uncordon" data-akey="${pfx}:uncordon">Uncordon</button>`;
+}
+function ctlCapProfHTML(pfx){
+  return `<span class="lbl">Power Cap:</span>
+    <input id="${pfx}-cap" type="number" min="1" step="1" placeholder="값">
+    <select id="${pfx}-capu"><option value="kw">kW</option><option value="pct">%</option></select>
+    <button class="sm" data-act="power_cap" data-akey="${pfx}:power_cap">Power Cap 적용</button>
+    <button class="sm ghost" data-act="power_uncap" data-akey="${pfx}:power_uncap">Cap 해제</button>
+    <span class="lbl" style="margin-left:10px">Workload:</span>
+    <select id="${pfx}-prof">
+      <option value="idle">idle</option><option value="steady" selected>steady</option>
+      <option value="train">train</option><option value="burst">burst</option>
+    </select>
+    <button class="sm" data-act="workload" data-akey="${pfx}:workload">프로필 적용</button>`;
+}
+
+// Cluster 탭 상단 일괄 제어 바 — 한 번만 생성 (폴링에도 입력·armed 상태 유지)
+function buildClusterCtl(){
+  const el = $("cluster-ctl");
+  if(!el || $("ctl-scope")) return;
+  if(!obsRacks.length){
+    el.innerHTML = `<div class="hint">rack control API (obs) unavailable</div>`;
+    return;
+  }
+  const sites = [...new Set(obsRacks.map(r=>r.site))];
+  const sus = [...new Set(obsRacks.map(r=>r.su_id))]
+    .sort((a,b)=>parseInt(a.split("-")[1],10)-parseInt(b.split("-")[1],10));
+  el.innerHTML = `
+    <div class="ctrl-row">
+      <span class="lbl">범위:</span>
+      <select id="ctl-scope">
+        <option value="all">전체 ${esc(obsRacks.length)}랙</option>
+        ${sites.map(s=>`<option value="site:${esc(s)}">사이트 ${esc(s)}</option>`).join("")}
+        ${sus.map(s=>`<option value="su:${esc(s)}">${esc(s)}</option>`).join("")}
+      </select>
+      ${ctlButtonsHTML("bulk")}
+    </div>
+    <div class="ctrl-row">${ctlCapProfHTML("ctl")}</div>
+    <div class="ctrl-row">
+      <span class="ctl-warn" id="ctl-warn"></span>
+      <span id="ctl-result"></span>
+    </div>`;
+  el.querySelectorAll("button[data-act]").forEach(b=>{
+    b.addEventListener("click",()=>{
+      const act = b.getAttribute("data-act");
+      confirmThen(b, $("ctl-warn"),
+        (act==="power_off"||act==="cordon") ? WARN_TXT : "",
+        ()=>execBulk(act));
+    });
+  });
+}
+
+async function execBulk(act){
+  const scopeSel = $("ctl-scope");
+  if(!scopeSel) return;
+  const v = scopeSel.value;
+  const scope = v==="all" ? {all:true}
+    : v.startsWith("site:") ? {site:v.slice(5)}
+    : {su:v.slice(3)};
+  const a = buildAction(act, $("ctl-cap"), $("ctl-capu"), $("ctl-prof"));
+  const res = $("ctl-result");
+  if(a.err){ res.innerHTML = `<span class="badge degraded">${esc(a.err)}</span>`; return; }
+  try{
+    const body = {scope, action:a.action};
+    if(a.params) body.params = a.params;
+    const r = await getJSON("/emulator/v1/obs/racks/control",
+      {method:"POST", headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)});
+    const nFail = (r.failed||[]).length;
+    res.innerHTML = `<span class="badge ${nFail?"provisioning":"ready"}">`
+      + `${esc(a.action)} → ${esc(r.applied)}/${esc(r.matched)} racks</span>`
+      + (nFail?` <span class="hint">failed ${esc(nFail)}</span>`:"")
+      + (r.summary?` <span class="hint">${esc(r.summary)}</span>`:"");
+  }catch(e){
+    res.innerHTML = `<span class="badge degraded">실패: ${esc(e.message)}</span>`;
+  }
+  if(activeSection==="cluster") await loadCluster();   // 그리드 즉시 갱신
+  else await loadObs();
+}
+
+// Rack 탭 단일 랙 제어 카드 — 한 번만 생성, 상태 행만 갱신
+function buildRackCtl(){
+  const el = $("rack-ctl");
+  if(!el) return;
+  if(!$("rc-state")){
+    el.innerHTML = `<div class="card">
+      <div class="ctrl-row" id="rc-state"></div>
+      <div class="ctrl-row">${ctlButtonsHTML("rack")}</div>
+      <div class="ctrl-row">${ctlCapProfHTML("rc")}</div>
+      <div class="ctrl-row">
+        <span class="ctl-warn" id="rc-warn"></span>
+        <span id="rc-result"></span>
+      </div>
+    </div>`;
+    el.querySelectorAll("button[data-act]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const act = b.getAttribute("data-act");
+        confirmThen(b, $("rc-warn"),
+          (act==="power_off"||act==="cordon") ? WARN_TXT : "",
+          ()=>execRack(act));
+      });
+    });
+  }
+  updateRackCtlState();
+}
+
+function updateRackCtlState(){
+  const st = $("rc-state");
+  if(!st) return;
+  const ob = OBSMAP[selectedRack];
+  if(!ob){
+    st.innerHTML = `<span class="lbl">랙 제어 — 데모 ·</span>`
+      + `<span class="hint">obs 상태 미확인 (${esc(selectedRack||"랙 미선택")})</span>`;
+    return;
+  }
+  const pCls = ob.power_state==="on" ? "ready"
+    : ob.power_state==="off" ? "degraded" : "provisioning";
+  st.innerHTML = `<span class="lbl">랙 제어 — 데모 ·</span>
+    <span style="font-family:var(--mono);color:var(--green)">${esc(ob.rack_id)}</span>
+    <span class="badge ${pCls}">power ${esc(ob.power_state)}</span>
+    <span class="badge" ${ob.power_cap_kw!=null?'style="color:#5aa7e8;border-color:#2a4868"':""}>`
+    + `cap ${ob.power_cap_kw==null?"없음":esc(ob.power_cap_kw)+" kW"}</span>
+    <span class="badge">profile ${esc(ob.workload_profile)}</span>
+    <span class="badge ${ob.cordoned?"provisioning":""}">${ob.cordoned?"cordoned ⊘":"cordon 없음"}</span>
+    <span class="hint">IT ${esc(ob.it_power_kw)} kW · 1차 클릭 후 3초 내 재클릭으로 실행</span>`;
+}
+
+async function execRack(act){
+  if(!selectedRack) return;
+  const a = buildAction(act, $("rc-cap"), $("rc-capu"), $("rc-prof"));
+  const res = $("rc-result");
+  if(a.err){ res.innerHTML = `<span class="badge degraded">${esc(a.err)}</span>`; return; }
+  try{
+    const body = {action:a.action};
+    if(a.params) body.params = a.params;
+    const r = await getJSON(
+      `/emulator/v1/obs/racks/${encodeURIComponent(selectedRack)}/control`,
+      {method:"POST", headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)});
+    if(r.state)
+      OBSMAP[r.rack_id||selectedRack] =
+        Object.assign(OBSMAP[r.rack_id||selectedRack]||{rack_id:selectedRack}, r.state);
+    res.innerHTML = `<span class="badge ${r.applied?"ready":"provisioning"}">`
+      + `${esc(a.action)} → ${esc(r.rack_id||selectedRack)} ${r.applied?"applied":"no-op"}</span>`;
+  }catch(e){
+    res.innerHTML = `<span class="badge degraded">실패: ${esc(e.message)}</span>`;
+  }
+  await loadObs();
+  updateRackCtlState();
+  if(activeSection==="cluster") loadCluster();
+}
+
+// ── Digital Twin Control: 적용된 랙 설정 테이블 (기본값과 다른 랙만) ──
+function renderCtlSettings(){
+  const tbl = document.getElementById("ctlset-table");
+  const cnt = document.getElementById("ctlset-count");
+  if(!tbl) return;
+  const rows = (obsRacks||[]).filter(r =>
+    (r.power_state && r.power_state !== "on") || r.power_cap_kw ||
+    r.cordoned || (r.workload_profile && r.workload_profile !== "steady"));
+  if(cnt) cnt.textContent = rows.length;
+  if(!rows.length){
+    tbl.innerHTML = `<tr><td class="hint">기본값과 다른 랙 없음 — 전체 on · uncap · steady · uncordon</td></tr>`;
+    return;
+  }
+  tbl.innerHTML =
+    `<tr><th>Rack</th><th>Site / SU</th><th>Power</th><th>Cap</th>`+
+    `<th>Profile</th><th>Cordon</th><th class="num">IT kW</th><th>복원</th></tr>`
+    + rows.map(r=>
+      `<tr><td style="font-family:var(--mono)">${esc(r.rack_id)}</td>`+
+      `<td>${esc(r.site)} · ${esc(r.su_id)}</td>`+
+      `<td>${r.power_state!=="on"
+          ? `<span class="badge ${r.power_state==="off"?"crit":"warn"}">${esc(r.power_state)}</span>` : "on"}</td>`+
+      `<td>${r.power_cap_kw ? esc(r.power_cap_kw)+" kW" : "—"}</td>`+
+      `<td>${esc(r.workload_profile||"steady")}</td>`+
+      `<td>${r.cordoned ? '<span class="badge warn">cordoned</span>' : "—"}</td>`+
+      `<td class="num">${esc(r.it_power_kw)}</td>`+
+      `<td><button data-ctlreset="${esc(r.rack_id)}" `+
+      `style="background:none;border:1px solid var(--line);color:var(--green);`+
+      `border-radius:6px;padding:2px 9px;font-size:10px;cursor:pointer">기본값 복원</button></td></tr>`
+    ).join("");
+}
+async function ctlResetRack(rid){
+  const post = b => fetch(`/emulator/v1/obs/racks/${encodeURIComponent(rid)}/control`,
+    {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b)});
+  await post({action:"power_on"});
+  await post({action:"power_uncap"});
+  await post({action:"uncordon"});
+  await post({action:"workload",params:{profile:"steady"}});
+  await loadObs();
+  loadCluster();
+}
+document.addEventListener("click", e=>{
+  const b = e.target.closest("[data-ctlreset]");
+  if(b) ctlResetRack(b.dataset.ctlreset);
+});
+
+async function loadCluster(){
+  try{
+    const [c,g,a] = await Promise.all([
+      getJSON("/emulator/v1/cluster"),
+      getJSON("/emulator/v1/cluster/racks?site=gasan"),
+      getJSON("/emulator/v1/cluster/racks?site=ansan"),
+      loadObs(),
+    ]);
+    buildClusterCtl();
+    const cs = [
+      ["Sites", (c.sites||[]).length],
+      ["Racks", c.racks], ["Hosts", c.trays],
+      ["GPU", c.gpus], ["DPU", c.dpus],
+    ];
+    $("cluster-stats").innerHTML = cs.map(([k,v])=>
+      `<div class="stat"><div class="k">${esc(k)}</div><div class="v ${k==='GPU'?'green':''}">${esc(v)}</div></div>`
+    ).join("");
+    const sm = obsSummary, chips = [];
+    if(sm){
+      if(sm.racks_off) chips.push(`<span class="suchip" style="color:var(--red);border-color:#4a2530"><b>${esc(sm.racks_off)}</b> racks off</span>`);
+      if(sm.racks_cordoned) chips.push(`<span class="suchip" style="color:var(--amber);border-color:#4a4020"><b>${esc(sm.racks_cordoned)}</b> cordoned</span>`);
+      if(sm.racks_capped) chips.push(`<span class="suchip" style="color:#5aa7e8;border-color:#2a4868"><b>${esc(sm.racks_capped)}</b> power capped</span>`);
+    }
+    $("cluster-obs-chips").innerHTML = chips.join("");
+    renderCtlSettings();
+
+    const groups = [
+      {site_id:"gasan", site:(c.sites&&c.sites[0]&&c.sites[0].site)||"가산", racks:g.racks||[]},
+      {site_id:"ansan", site:(c.sites&&c.sites[1]&&c.sites[1].site)||"안산", racks:a.racks||[]},
+    ];
+    let html = "";
+    groups.forEach(grp=>{
+      const bySu = {};
+      grp.racks.forEach(r=>{ (bySu[r.su_id]=bySu[r.su_id]||[]).push(r); });
+      const suKeys = Object.keys(bySu).sort((x,y)=>{
+        const nx=parseInt(x.split("-").pop(),10), ny=parseInt(y.split("-").pop(),10);
+        return nx-ny;
+      });
+      html += `<div class="sub-sec"><h2>${esc(grp.site)}
+        <span class="count">${esc(grp.racks.length)} racks</span>
+        <span class="hint">— NICo instance nico-${esc(grp.site_id)}</span></h2>`;
+      suKeys.forEach(su=>{
+        const rs = bySu[su];
+        const gpu = rs.reduce((n,r)=>n+(r.gpus||0),0);
+        const tcount = rs.filter(r=>(r.tenants||[]).length).length;
+        html += `<div class="su-block">
+          <div class="suh"><span class="sut">${esc(su)}</span>
+            <span class="sum">${esc(rs.length)} racks · ${esc(gpu)} GPU`
+            + (tcount?` · ${esc(tcount)} w/ tenants`:``) + `</span></div>
+          <div class="rack-tiles">`
+          + rs.map(r=>{
+            const ob = OBSMAP[r.rack_id]||{};
+            const off = ob.power_state==="off";
+            const mixed = ob.power_state==="mixed";
+            const capped = ob.power_cap_kw!=null;
+            const cord = !!ob.cordoned;
+            const cls = rackStateCls(r)
+              + (off?" off":"") + (mixed?" mixed":"")
+              + (capped?" capped":"") + (cord?" cord":"");
+            const t = (r.tenants||[]).length;
+            const title = `${r.rack_id} · ${r.state} · ${t} tenant(s)`
+              + ` · power ${ob.power_state||"on"}`
+              + (capped?` · cap ${ob.power_cap_kw}kW`:"")
+              + (cord?` · cordoned`:"")
+              + (ob.workload_profile?` · ${ob.workload_profile}`:"");
+            return `<div class="rtile ${cls}" data-rack="${esc(r.rack_id)}"`
+              + ` title="${esc(title)}">`
+              + (t?`<span class="tdot"></span>`:``)
+              + (cord?`<span class="cmark">⊘</span>`:``)
+              + `<span class="rn">${esc(rackNum(r.rack_id))}</span>`
+              + `<span class="rg">${off?"OFF":esc(r.gpus)+"g"}</span></div>`;
+          }).join("")
+          + `</div></div>`;
+      });
+      html += `</div>`;
+    });
+    $("cluster-racks").innerHTML = html;
+    document.querySelectorAll("#cluster-racks .rtile").forEach(el=>{
+      el.addEventListener("click",()=>{
+        selectedRack = el.getAttribute("data-rack");
+        selectedTray = null; selectedDpu = null;
+        switchSection("rack");
+      });
+    });
+  }catch(e){ $("cluster-racks").innerHTML = `<div class="hint">cluster unavailable</div>`; }
+}
+
+// ── RACK (scoped to selectedRack) ─────────────────────────────────────
+async function loadRack(){
+  await buildRackPicker("rack-picker");
+  if(!selectedRack){ $("rack").innerHTML = `<div class="hint">no rack selected</div>`; return; }
+  try{
+    const [rk] = await Promise.all([
+      getJSON("/emulator/v1/cluster/racks/"+encodeURIComponent(selectedRack)),
+      loadObs(),
+    ]);
+    buildRackCtl();
+    const trays = rk.tray_detail||[];
+    $("rack-count").textContent = trays.length;
+    const meta = $("rack-picker-meta");
+    if(meta){
+      const pw = rk.power||{};
+      meta.textContent = `${rk.su_id} · ${rk.site} · state ${rk.state} · ${pw.On||0}/${rk.trays} on · ${rk.gpus} GPU`;
+    }
+    $("rack").innerHTML = trays.map(t=>{
+      const sel = (t.tray_id===selectedTray) ? " sel" : "";
+      return `<div class="tray${sel}" data-id="${esc(t.tray_id)}">
+        <span class="tnum">${esc(trayNum(t.tray_id))}</span>
+        <span class="dot ${powerCls(t.power_state)}" title="Power: ${esc(t.power_state)}"></span>
+        <div class="grow">
+          <div class="tname">${esc(trayShort(t.tray_id))}</div>
+          <div class="tsub">${esc(dpuTail(t.dpu_id||""))} · ${esc(t.boot_stage||"")}</div>
+        </div>
+        <span class="tgpu">${esc(t.gpus)}×GPU</span>
+        <span class="badge ${lcCls(t.lifecycle_state)}">${esc(t.lifecycle_state)}</span>
+        <span class="dot ${healthCls(t.health)}" title="Health: ${esc(t.health)}"></span>
+      </div>`;
+    }).join("");
+    document.querySelectorAll("#rack .tray").forEach(el=>{
+      el.addEventListener("click", async ()=>{
+        selectedTray = el.getAttribute("data-id");
+        try{
+          const t = await getJSON("/redfish/v1/Systems/"+encodeURIComponent(selectedTray));
+          window.__trayById[selectedTray] = t;
+        }catch(e){}
+        loadRack();
+      });
+    });
+    renderRackDetail();
+  }catch(e){ $("rack").innerHTML = `<div class="hint">rack unavailable</div>`; }
+}
+
+function renderRackDetail(){
+  if(!selectedTray || !window.__trayById[selectedTray]){ $("rack-detail").innerHTML=""; return; }
+  const t = window.__trayById[selectedTray];
+  const oem = (t.Oem&&t.Oem.Nvidia)||{}, boot = t.Boot||{};
+  const ps = t.PowerState, health = (t.Status&&t.Status.Health)||"OK";
+  const proc = t.ProcessorSummary||{};
+  const rows = [
+    ["Power State", ps], ["Health", health],
+    ["Lifecycle State", oem.LifecycleState], ["Boot Stage", oem.BootStage],
+    ["GPUs", proc.Count], ["GPU Model", proc.Model],
+    ["Boot Source", boot.BootSourceOverrideTarget],
+    ["Boot Override", boot.BootSourceOverrideEnabled],
+    ["BMC IP", oem.BmcIp], ["Compute Tray Id", oem.ComputeTrayId],
+  ];
+  $("rack-detail").innerHTML = `<div class="detail">
+    <div class="dh">
+      <span class="dot ${powerCls(ps)}"></span>
+      <span class="id">${esc(t.Id)}</span>
+      <span class="badge ${lcCls(oem.LifecycleState)}">${esc(oem.LifecycleState||"")}</span>
+      <span class="hint">${esc(t.Name||"")}</span>
+    </div>
+    <div class="kv">${rows.map(([k,v])=>
+      `<div class="kvi"><span class="kk">${esc(k)}</span><span class="vv">${esc(v==null?"—":v)}</span></div>`
+    ).join("")}</div>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="hint">Enforcing DPU:</span>
+      <button class="sm" id="rack-to-dpu" data-dpu="${esc(oem.DpuId||"")}">View DPU ${esc(dpuTail(oem.DpuId||""))} →</button>
+    </div>
+  </div>`;
+  const b = $("rack-to-dpu");
+  if(b) b.addEventListener("click",()=>{
+    selectedDpu = b.getAttribute("data-dpu");
+    switchSection("dpus");
+  });
+}
+
+// ── FABRIC ────────────────────────────────────────────────────────────
+async function loadFabric(){
+  try{
+    const [sum, nvl, ib, eth, sw, topo] = await Promise.all([
+      getJSON("/emulator/v1/fabric/summary"),
+      getJSON("/emulator/v1/fabric/nvlink"),
+      getJSON("/emulator/v1/fabric/ib/partitions"),
+      getJSON("/emulator/v1/fabric/ethernet/segments"),
+      getJSON("/emulator/v1/fabric/switches"),
+      getJSON("/emulator/v1/fabric/topology").catch(()=>null),
+    ]);
+    FABRIC_TOPO = topo || FABRIC_TOPO;
+    renderFabricSites(topo);
+    const sc = [
+      ["NVLink Domains", sum.nvlink_domains],
+      ["NVLink Trays", sum.nvlink_member_trays],
+      ["NVSwitch Trays", sum.nvlink_switch_trays],
+      ["IB Partitions", sum.ib_partitions],
+      ["Ethernet Segments", sum.ethernet_segments],
+      ["P_Keys Allocated", sum.pkeys_allocated],
+      ["Tenant Networks", sum.tenant_networks],
+      ["Attachments", sum.attachments],
+    ];
+    $("fabric-summary").innerHTML = sc.map(([k,v])=>
+      `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`
+    ).join("");
+
+    $("nvlink-card").innerHTML = `<div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <span class="badge ready">${esc(nvl.state)}</span>
+        <span style="font-family:var(--mono);color:var(--green)">${esc(nvl.domain_id)}</span>
+        <span class="hint">${esc(nvl.topology)}</span>
+      </div>
+      <div class="kv">
+        <div class="kvi"><span class="kk">GPU Count</span><span class="vv">${esc(nvl.gpu_count)}</span></div>
+        <div class="kvi"><span class="kk">Compute Trays</span><span class="vv">${esc(nvl.compute_tray_count)}</span></div>
+        <div class="kvi"><span class="kk">NVSwitch Trays</span><span class="vv">${esc(nvl.nvswitch_tray_count)}</span></div>
+        <div class="kvi"><span class="kk">BW / GPU</span><span class="vv">${esc(nvl.bandwidth_per_gpu_gbps)} Gbps</span></div>
+      </div>
+    </div>`;
+
+    const parts = ib.partitions||[];
+    $("ib-count").textContent = parts.length;
+    $("ib-table").innerHTML =
+      `<tr><th>P_Key</th><th>Tenant</th><th>VNI</th><th>Membership</th>`
+      + `<th class="num">Members</th><th>Source</th><th>State</th></tr>`
+      + (parts.length ? parts.map(p=>
+        `<tr><td>${esc(p.pkey)}</td><td>${esc(p.tenant_id||"—")}</td>`
+        + `<td>${esc(p.vni==null?"—":p.vni)}</td><td>${esc(p.membership)}</td>`
+        + `<td class="num">${esc(p.member_count)}</td><td>${esc(p.source)}</td>`
+        + `<td>${esc(p.state)}</td></tr>`).join("")
+        : `<tr><td colspan="7" class="hint">no partitions — attach a tenant to a DPU first</td></tr>`);
+
+    const segs = eth.segments||[];
+    $("eth-count").textContent = segs.length;
+    $("eth-table").innerHTML =
+      `<tr><th>Network</th><th>Tenant</th><th>Type</th><th>VNI</th><th>VLAN</th>`
+      + `<th>VRF</th><th>Subnet</th><th class="num">Members</th><th>State</th></tr>`
+      + (segs.length ? segs.map(s=>
+        `<tr><td>${esc(s.network_id)}</td><td>${esc(s.tenant_id||"—")}</td>`
+        + `<td>${esc(s.network_type||"—")}</td><td>${esc(s.vni==null?"—":s.vni)}</td>`
+        + `<td>${esc(s.vlan_id==null?"—":s.vlan_id)}</td><td>${esc(s.vrf||"—")}</td>`
+        + `<td>${esc(s.subnet||"—")}</td><td class="num">${esc(s.member_count)}</td>`
+        + `<td>${esc(s.state)}</td></tr>`).join("")
+        : `<tr><td colspan="9" class="hint">no segments — attach a tenant to a DPU first</td></tr>`);
+
+    const switches = sw.switches||[];
+    $("sw-count").textContent = switches.length;
+    $("sw-table").innerHTML =
+      `<tr><th>Switch</th><th>Role</th><th>Fabric</th><th class="num">Ports</th>`
+      + `<th>State</th><th>Link</th></tr>`
+      + switches.map(s=>
+        `<tr><td>${esc(s.switch_id)}</td><td>${esc(s.role)}</td><td>${esc(s.fabric)}</td>`
+        + `<td class="num">${esc(s.ports)}</td><td>${esc(s.state)}</td>`
+        + `<td>${esc(s.link_state)}</td></tr>`).join("");
+  }catch(e){ $("fabric-summary").innerHTML = `<div class="hint">fabric unavailable</div>`; }
+  loadUfmNetq().catch(()=>{});
+  loadConverged().catch(()=>{});
+}
+
+// ── Converged Network (스토리지·관리 N-S rail) — Fabric 탭 하단 ───────
+async function loadConverged(){
+  if(Object.keys(ARMED).length) return;   // 2단계 확인 중 재렌더 방지
+  const stCls = s => s==="ok"||s==="active" ? "ready"
+    : s==="degraded" ? "warn" : "crit";
+  const [ov, pth] = await Promise.all([
+    getJSON("/converged/v1/overview"),
+    getJSON("/converged/v1/paths"),
+  ]);
+  const sites = ov.sites||[];
+  $("conv-stats").innerHTML = sites.map(s=>{
+    const sp = s.storage_paths||{}, mp = s.mgmt_paths||{};
+    return `<div class="stat"><div class="k">${esc(s.site_name)} · ${esc(s.fabric)}</div>
+      <div class="v" style="font-size:15px">
+        <span class="badge ${stCls(s.state)}">${esc(s.state)}</span>
+        storage ${esc(sp.active)}/${esc(sp.total)} · mgmt ${esc(mp.active)}/${esc(mp.total)}</div>
+      <div class="k" style="margin-top:4px">VNI seg ${esc(s.vni_segments)} · oversub ${esc(s.oversub_ratio)}:1 · ${esc(s.nic)} + ${esc(s.dpu)}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        ${faultBtn("converged","path_degrade",s.site,"path degrade")}
+        ${faultBtn("converged","storage_congestion",s.site,"congestion",true)}
+        ${faultBtn("converged","recover",s.site,"recover")}
+      </div>
+    </div>`;
+  }).join("") || `<div class="hint">converged overview unavailable</div>`;
+  wireFaultBtns("#conv-stats","conv-warn",()=>loadConverged());
+  const rows = pth.paths||[];
+  $("conv-count").textContent = rows.length;
+  $("conv-table").innerHTML =
+    `<tr><th>Tenant</th><th>Src SU</th><th>Dst</th><th class="num">GPU</th>`
+    + `<th class="num">BW Gbps</th><th class="num">Lat µs</th>`
+    + `<th class="num">ECN</th><th class="num">PFC pause</th><th>State</th></tr>`
+    + (rows.length ? rows.map(p=>
+      `<tr><td>${esc(p.tenant_id)}</td><td>${esc(p.src_su)}</td>`
+      + `<td style="font-family:var(--mono)">${esc(p.dst)}</td>`
+      + `<td class="num">${esc(p.gpus)}</td><td class="num">${esc(p.bw_gbps)}</td>`
+      + `<td class="num">${esc(p.latency_us)}</td><td class="num">${esc(p.ecn_marks)}</td>`
+      + `<td class="num">${esc(p.pfc_pause)}</td>`
+      + `<td><span class="badge ${stCls(p.state)}">${esc(p.state)}</span></td></tr>`).join("")
+      : `<tr><td colspan="9" class="hint">no tenant storage paths — attach a tenant to a DPU first</td></tr>`);
+}
+
+// ── STORAGE (VAST Data VMS) ───────────────────────────────────────────
+async function loadStorage(){
+  if(Object.keys(ARMED).length) return;   // 2단계 확인 중 재렌더 방지
+  const stCls = s => s==="HEALTHY"||s==="active" ? "ready"
+    : s==="DEGRADED"||s==="degraded" ? "warn" : "crit";
+  try{
+    const [cl, vw, pf, al] = await Promise.all([
+      getJSON("/vast/v1/clusters"),
+      getJSON("/vast/v1/views"),
+      getJSON("/vast/v1/performance"),
+      getJSON("/vast/v1/alarms"),
+    ]);
+    const clusters = cl.clusters||[];
+    $("vast-count").textContent = clusters.length;
+    $("vast-clusters").innerHTML = clusters.map(c=>{
+      const pct = Math.min(100, c.used_pct||0);
+      const bar = pct>=90 ? "#ff6b6b" : pct>=75 ? "var(--amber)" : "var(--green)";
+      const perf = (pf.performance||[]).find(p=>p.scope==="cluster"&&p.name===c.name)||{};
+      return `<div class="inst">
+        <div class="ihead">
+          <div>
+            <div class="iid">${esc(c.name)}</div>
+            <div class="isite">${esc(c.site_name)} <span class="rgn">· VAST ${esc(c.version)} · DASE</span></div>
+          </div>
+          <span class="badge ${stCls(c.state)}">${esc(c.state)}</span>
+        </div>
+        <h3>Capacity <span class="r">${esc(c.used_pb)} / ${esc(c.usable_pb)} PB (${esc(pct)}%)</span></h3>
+        <div style="height:8px;background:#1c2733;border-radius:4px;overflow:hidden;margin:4px 0 10px">
+          <div style="width:${pct}%;height:8px;background:${bar}"></div>
+        </div>
+        <div class="fleet">
+          <div class="fx"><div class="k">CBox</div><div class="v">${esc(c.cboxes_active)}/${esc(c.cboxes)}</div></div>
+          <div class="fx"><div class="k">DBox</div><div class="v">${esc(c.dboxes)}</div></div>
+          <div class="fx"><div class="k">Raw PB</div><div class="v">${esc(c.raw_pb)}</div></div>
+          <div class="fx"><div class="k">DRR</div><div class="v green">${esc(c.drr)}:1</div></div>
+          <div class="fx"><div class="k">Read</div><div class="v">${esc(perf.read_gbps==null?"—":perf.read_gbps)}G</div></div>
+          <div class="fx"><div class="k">Write</div><div class="v">${esc(perf.write_gbps==null?"—":perf.write_gbps)}G${perf.ckpt_burst?" ⚡":""}</div></div>
+        </div>
+        <div class="hint" style="margin-top:6px">p99 ${esc(perf.latency_ms_p99==null?"—":perf.latency_ms_p99)}ms
+          · cache ${esc(perf.cache_hit_pct==null?"—":perf.cache_hit_pct)}%
+          · clients ${esc(perf.active_clients==null?"—":perf.active_clients)}
+          ${c.failed_drives?` · <b style="color:var(--amber)">failed drives ${esc(c.failed_drives)}</b>`:""}</div>
+        <div class="mact" style="margin:10px 0 0">
+          ${faultBtn("vast","nvme_drive_fail",c.name,"drive fail")}
+          ${faultBtn("vast","cbox_down",c.name,"cbox down",true)}
+          ${faultBtn("vast","latency_spike",c.name,"latency spike")}
+          ${faultBtn("vast","capacity_pressure",c.name,"capacity")}
+          ${faultBtn("vast","recover",c.name,"recover")}
+          <span class="hint">장애 주입 — 데모</span>
+        </div>
+      </div>`;
+    }).join("") || `<div class="hint">no VAST clusters</div>`;
+    wireFaultBtns("#vast-clusters","vast-warn",()=>loadStorage());
+
+    const views = vw.views||[];
+    $("vv-count").textContent = views.length;
+    $("vv-table").innerHTML =
+      `<tr><th>Path</th><th>Tenant</th><th>Cluster</th><th>Protocols</th>`
+      + `<th class="num">Used TB</th><th class="num">Quota TB</th>`
+      + `<th class="num">QoS BW</th><th class="num">QoS IOPS</th><th>State</th></tr>`
+      + (views.length ? views.map(v=>
+        `<tr><td style="font-family:var(--mono)">${esc(v.path)}</td><td>${esc(v.tenant_id)}</td>`
+        + `<td>${esc(v.cluster)}</td><td>${esc((v.protocols||[]).join("/"))}</td>`
+        + `<td class="num">${esc(v.used_tb)}</td><td class="num">${esc(v.quota_tb)}</td>`
+        + `<td class="num">${esc(v.qos&&v.qos.bw_gbps)}G</td><td class="num">${esc(v.qos&&v.qos.iops_k)}K</td>`
+        + `<td><span class="badge ${stCls(v.state)}">${esc(v.state)}</span></td></tr>`).join("")
+        : `<tr><td colspan="9" class="hint">no tenant views — attach a tenant to a DPU first</td></tr>`);
+
+    const perfs = pf.performance||[];
+    $("vp-count").textContent = perfs.length;
+    $("vp-table").innerHTML =
+      `<tr><th>Name</th><th>Scope</th><th class="num">Read Gbps</th><th class="num">Write Gbps</th>`
+      + `<th class="num">Read kIOPS</th><th class="num">Write kIOPS</th>`
+      + `<th class="num">p99 ms</th><th class="num">Cache %</th><th class="num">Clients</th><th>Ckpt</th></tr>`
+      + perfs.map(p=>
+        `<tr><td style="font-family:var(--mono)">${esc(p.name)}</td><td>${esc(p.scope)}</td>`
+        + `<td class="num">${esc(p.read_gbps)}</td><td class="num">${esc(p.write_gbps)}</td>`
+        + `<td class="num">${esc(p.read_iops_k)}</td><td class="num">${esc(p.write_iops_k)}</td>`
+        + `<td class="num" ${p.latency_ms_p99>5?'style="color:#ff6b6b"':""}>${esc(p.latency_ms_p99)}</td>`
+        + `<td class="num">${esc(p.cache_hit_pct)}</td><td class="num">${esc(p.active_clients)}</td>`
+        + `<td>${p.ckpt_burst?'<span class="badge warn">burst</span>':"—"}</td></tr>`).join("");
+
+    const alarms = al.alarms||[];
+    $("va-count").textContent = al.open||0;
+    $("va-list").innerHTML = alarms.map(a=>{
+      const cls = a.state!=="firing" ? "ok"
+        : a.severity==="critical" ? "critical" : "warning";
+      return `<div class="ev"><span class="sev ${cls}">${esc(a.state==="firing"?a.severity:"resolved")}</span>`
+        + `<span class="msg">[${esc(a.resource)}] ${esc(a.summary)}</span></div>`;
+    }).join("") || `<div class="hint">no storage alarms</div>`;
+  }catch(e){
+    $("vast-clusters").innerHTML = `<div class="hint">storage emulator unavailable</div>`;
+  }
+}
+
+// ── UFM(IB)·NetQ(Ethernet) 개별 스위치 에뮬레이터 ─────────────────────
+async function loadUfmNetq(){
+  if(Object.keys(ARMED).length) return;   // 2단계 확인 중 재렌더 방지
+  const stCls = s => s==="ok"||s==="up" ? "ready"
+    : s==="degraded"||s==="warn" ? "warn" : "crit";
+  const [uSys, uHealth, nSw, nVal] = await Promise.all([
+    getJSON("/ufm/v1/resources/systems"),
+    getJSON("/ufm/v1/fabric/health"),
+    getJSON("/netq/v1/switches"),
+    getJSON("/netq/v1/validation"),
+  ]);
+  const systems = uSys.systems||[];
+  $("ufm-count").textContent = systems.length;
+  $("ufm-health").innerHTML = `— 링크 ${esc(uHealth.links_active)}/${esc(uHealth.links_total)} active`
+    + ` · degraded <b style="color:${uHealth.links_degraded? "var(--amber)":"inherit"}">${esc(uHealth.links_degraded)}</b>`
+    + ` · down <b style="color:${uHealth.links_down? "#ff6b6b":"inherit"}">${esc(uHealth.links_down)}</b>`
+    + ` · flaps(24h) ${esc(uHealth.flaps_24h)} · score ${esc(uHealth.score)}`;
+  $("ufm-table").innerHTML =
+    `<tr><th>Switch</th><th>Type</th><th>Plane</th><th>Site / SU</th><th>Model · FW</th>`
+    + `<th class="num">Ports</th><th class="num">Temp</th><th>State</th><th>제어 (데모)</th></tr>`
+    + systems.map(s=>
+      `<tr><td style="font-family:var(--mono)">${esc(s.name)}</td><td>${esc(s.type)}</td>`
+      + `<td>${esc(s.plane)}</td><td>${esc(s.site)}${s.su_id? " · "+esc(s.su_id):""}</td>`
+      + `<td>${esc(s.model)} · ${esc(s.fw)}</td>`
+      + `<td class="num">${esc(s.ports_active)}/${esc(s.ports_total)}</td>`
+      + `<td class="num">${esc(s.temperature_c)}°C</td>`
+      + `<td><span class="badge ${stCls(s.state)}">${esc(s.state)}</span></td>`
+      + `<td style="white-space:nowrap">`
+      + faultBtn("ufm","switch_down",s.guid,"switch down",true)
+      + faultBtn("ufm","port_flap",s.name,"port flap")
+      + faultBtn("ufm","link_degrade",s.name,"link degrade")
+      + faultBtn("ufm","recover",s.name,"recover")
+      + `</td></tr>`).join("");
+  const nsw = nSw.switches||[];
+  $("netq-count").textContent = nsw.length;
+  const checks = nVal.checks||[];
+  $("netq-val").innerHTML = "— validation: " + checks.map(c=>
+    `<span class="badge ${c.result==="pass"?"ready":c.result==="warn"?"warn":"crit"}"`
+    + ` title="${esc(c.detail||"")}">${esc(c.check)} ${esc(c.result)}</span>`).join(" ");
+  $("netq-table").innerHTML =
+    `<tr><th>Switch</th><th>Role</th><th>Site / SU</th><th>Model</th>`
+    + `<th class="num">If up</th><th class="num">Temp</th><th>State</th><th>제어 (데모)</th></tr>`
+    + nsw.map(s=>
+      `<tr><td style="font-family:var(--mono)">${esc(s.name)}</td><td>${esc(s.role)}</td>`
+      + `<td>${esc(s.site)}${s.su_id? " · "+esc(s.su_id):""}</td><td>${esc(s.model)}</td>`
+      + `<td class="num">${esc(s.interfaces_up)}/${esc(s.interfaces_total)}</td>`
+      + `<td class="num">${esc(s.temperature_c)}°C</td>`
+      + `<td><span class="badge ${stCls(s.state)}">${esc(s.state)}</span></td>`
+      + `<td style="white-space:nowrap">`
+      + faultBtn("netq","bgp_flap",s.name,"bgp flap")
+      + faultBtn("netq","link_down",s.name,"link down")
+      + faultBtn("netq","pfc_storm",s.name,"pfc storm",true)
+      + faultBtn("netq","recover",s.name,"recover")
+      + `</td></tr>`).join("");
+  wireFaultBtns("#ufm-table","ufm-warn",()=>loadUfmNetq());
+  wireFaultBtns("#netq-table","netq-warn",()=>loadUfmNetq());
+}
+
+// ── SITE FABRIC SECTIONS + IB 토폴로지 구성 뷰 팝업 (요청 2) ──────────
+function renderFabricSites(topo){
+  const el = $("fabric-sites");
+  if(!el) return;
+  const sites = (topo&&topo.sites)||[];
+  $("fsite-count").textContent = sites.length;
+  if(!sites.length){
+    el.innerHTML = `<div class="hint">site fabric topology unavailable</div>`;
+    return;
+  }
+  el.innerHTML = sites.map(s=>{
+    const boxes = [["Racks",s.racks],["GPU",s.gpus],["NVLink Dom",s.nvlink_domains],
+      ["IB P_Key",s.ib_partitions],["Eth Seg",s.ethernet_segments],["SU",(s.sus||[]).length]];
+    const spineChips = (s.networks||[]).map(n=>
+      `<span class="suchip"><b>${esc(n.name)}</b> ${esc((n.spines||[]).length)} spine · ${esc(n.state)}</span>`
+    ).join("");
+    const tn = (s.tenants||[]).map((t,i)=>
+      `<span class="chip" style="background:transparent;border-color:${PALETTE[i%PALETTE.length]};color:${PALETTE[i%PALETTE.length]}">`
+      + `${esc(t.tenant_id)}${t.pkey?" · "+esc(t.pkey):""}</span>`).join("")
+      || `<span class="chip none">no tenant partitions</span>`;
+    return `<div class="inst">
+      <div class="ihead">
+        <div>
+          <div class="iid">${esc(s.site)}</div>
+          <div class="isite">${esc(s.nico_instance)} <span class="rgn">· ${esc(s.region)} · ${esc(s.ib_tier)}</span></div>
+        </div>
+        <button class="sm" data-topo="${esc(s.site_id)}" ${s.racks?"":"disabled"}>토폴로지 구성 뷰</button>
+      </div>
+      <h3>Fabric Summary <span class="r">${esc(s.trays)} hosts</span></h3>
+      <div class="fleet">${boxes.map(([k,v])=>
+        `<div class="fx"><div class="k">${esc(k)}</div><div class="v ${k==='GPU'?'green':''}">${esc(v)}</div></div>`
+      ).join("")}</div>
+      <h3>Dual-Plane InfiniBand (Fabric-A / Fabric-B)</h3>
+      <div class="breakdown">${spineChips || '<span class="hint">no planes</span>'}</div>
+      <h3>Tenant Partitions (P_Key)</h3>
+      <div class="chips">${tn}</div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("#fabric-sites button[data-topo]").forEach(b=>{
+    b.addEventListener("click",()=>openTopoModal(b.getAttribute("data-topo")));
+  });
+}
+
+async function openTopoModal(siteId){
+  topoSite = siteId; topoPlane = "both";
+  $("modal-topo").classList.add("open");
+  if(!FABRIC_TOPO){
+    try{ FABRIC_TOPO = await getJSON("/emulator/v1/fabric/topology"); }catch(e){}
+  }
+  renderTopoModal();
+}
+
+function renderTopoModal(){
+  const sites = (FABRIC_TOPO&&FABRIC_TOPO.sites)||[];
+  const site = sites.find(s=>s.site_id===topoSite) || sites[0];
+  if(!site){ $("tp-body").innerHTML = `<div class="hint">topology unavailable</div>`; return; }
+  topoSite = site.site_id;
+  $("tp-ctl").innerHTML =
+    `<select id="tp-site">${sites.map(s=>
+      `<option value="${esc(s.site_id)}" ${s.site_id===topoSite?"selected":""}>${esc(s.site)} · ${esc(s.site_id)}</option>`
+    ).join("")}</select>
+     <select id="tp-plane">
+       <option value="both" ${topoPlane==="both"?"selected":""}>Fabric-A + B (양쪽)</option>
+       <option value="Fabric-A" ${topoPlane==="Fabric-A"?"selected":""}>Fabric-A</option>
+       <option value="Fabric-B" ${topoPlane==="Fabric-B"?"selected":""}>Fabric-B</option>
+     </select>`;
+  $("tp-site").addEventListener("change",()=>{ topoSite=$("tp-site").value; renderTopoModal(); });
+  $("tp-plane").addEventListener("change",()=>{ topoPlane=$("tp-plane").value; renderTopoModal(); });
+  const colorOf = {};
+  (site.tenants||[]).forEach((t,i)=>colorOf[t.tenant_id]=PALETTE[i%PALETTE.length]);
+  const legend = `<div class="topo-legend">
+      <span><span class="sw" style="background:#13314f;border-color:#2a4868"></span>Fabric-A spine · 링크</span>
+      <span><span class="sw" style="background:#241b3a;border-color:#463366"></span>Fabric-B spine · 링크</span>
+      <span><span class="sw" style="background:#0e1620"></span>SU (랙 집약)</span>
+      <span style="color:var(--red)">--- degraded 링크 (파선)</span>`
+    + (site.tenants||[]).map(t=>
+      `<span><span class="sw" style="background:${colorOf[t.tenant_id]}"></span>${esc(t.tenant_id)}${t.pkey?" ("+esc(t.pkey)+")":""}</span>`
+    ).join("")
+    + ((site.tenants||[]).length?"":`<span>테넌트 파티션 없음 — 전체 미할당 풀</span>`)
+    + `</div>`;
+  $("tp-body").innerHTML =
+    `<div class="hint" style="margin-bottom:8px;font-family:var(--mono)">
+       ${esc(site.site)} (${esc(site.nico_instance)}) — ${esc(site.ib_tier)} ·
+       racks ${esc(site.racks)} · GPU ${esc(site.gpus)} · IB P_Key ${esc(site.ib_partitions)} ·
+       SU 단위 집약 뷰 (랙 개수 라벨)</div>`
+    + legend
+    + `<div class="topo-wrap">${drawTopoSVG(site, topoPlane, colorOf)}</div>`;
+}
+
+function drawTopoSVG(site, plane, colorOf){
+  const planes = plane==="both" ? ["Fabric-A","Fabric-B"] : [plane];
+  const PS = {"Fabric-A":{fill:"#13314f",stroke:"#2a4868",text:"#9fd0ff",link:"#5aa7e8"},
+              "Fabric-B":{fill:"#241b3a",stroke:"#463366",text:"#c8a5e8",link:"#b48ce8"}};
+  const sus = site.sus||[];
+  const COLW = 150, X0 = 46;
+  const W = Math.max(760, X0*2 + Math.max(sus.length,1)*COLW);
+  const spineY = {}; planes.forEach((p,i)=>spineY[p]=28+i*66);
+  const leafY = 28 + planes.length*66 + 40;
+  const suY = leafY + 58;
+  const H = suY + 112;
+  const cx = W/2;
+  let links = "", nodes = "";
+  planes.forEach(pn=>{
+    const net = (site.networks||[]).find(n=>n.name===pn); if(!net) return;
+    const st = PS[pn], n = net.spines.length, y = spineY[pn];
+    nodes += `<text x="8" y="${y+18}" fill="${st.text}" font-size="11" font-weight="700">${esc(pn)}</text>`;
+    net.spines.forEach((sp,k)=>{
+      const sx = cx + (k-(n-1)/2)*168;
+      nodes += `<rect x="${sx-72}" y="${y}" width="144" height="30" rx="6" fill="${st.fill}" stroke="${st.stroke}"/>
+        <text x="${sx}" y="${y+13}" text-anchor="middle" fill="${st.text}" font-size="9.5" font-weight="700">${esc(sp.id)}</text>
+        <text x="${sx}" y="${y+24}" text-anchor="middle" fill="${st.text}" opacity=".65" font-size="8.5">${esc(sp.model)}</text>`;
+    });
+  });
+  sus.forEach((su,i)=>{
+    const lx = X0 + i*COLW, lcx = lx + 56;
+    planes.forEach(pn=>{
+      const net = (site.networks||[]).find(n=>n.name===pn); if(!net) return;
+      const st = PS[pn], n = net.spines.length, y = spineY[pn];
+      const lstate = (su.links||{})[pn]||"up";
+      const col = lstate==="degraded" ? "#f0a3b0" : st.link;
+      net.spines.forEach((sp,k)=>{
+        const sx = cx + (k-(n-1)/2)*168;
+        links += `<line x1="${sx}" y1="${y+30}" x2="${lcx}" y2="${leafY}" stroke="${col}"
+          stroke-width="${lstate==="degraded"?1.7:0.9}" opacity="${lstate==="degraded"?0.95:0.5}"
+          ${lstate==="degraded"?'stroke-dasharray="4 3"':""}/>`;
+      });
+    });
+    nodes += `<rect x="${lx}" y="${leafY}" width="112" height="32" rx="5" fill="#101a26" stroke="#33506e"/>
+      <text x="${lcx}" y="${leafY+13}" text-anchor="middle" fill="#9fb8d0" font-size="9">leaf ×${esc(su.leaves_per_network)} /plane · rail</text>
+      <text x="${lcx}" y="${leafY+25}" text-anchor="middle" fill="#5a6b80" font-size="8.5">${esc(su.links_800g)}×800G links</text>`;
+    links += `<line x1="${lcx}" y1="${leafY+32}" x2="${lcx}" y2="${suY}" stroke="#33506e" stroke-width="1.1"/>`;
+    const degraded = (su.degraded_racks||0)>0;
+    nodes += `<rect x="${lx-10}" y="${suY}" width="132" height="96" rx="8" fill="#0e1620"
+        stroke="${degraded?"#4a2530":"#223142"}"/>
+      <text x="${lcx}" y="${suY+16}" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="700">${esc(su.su_id)}</text>
+      <text x="${lcx}" y="${suY+30}" text-anchor="middle" fill="#8aa0b4" font-size="9">${esc(su.racks)} racks · ${esc(su.gpus)} GPU</text>`;
+    const ts = su.tenants||[];
+    ts.slice(0,3).forEach((t,k)=>{
+      const ty = suY + 41 + k*16;
+      nodes += `<rect x="${lx-2}" y="${ty}" width="9" height="9" rx="2" fill="${colorOf[t.tenant_id]||"#4a5f78"}"/>
+        <text x="${lx+11}" y="${ty+8}" fill="#c9d2dc" font-size="8">${esc(t.tenant_id)}${t.pkey?" "+esc(t.pkey):""} · ${esc(t.racks)}랙</text>`;
+    });
+    if(ts.length>3)
+      nodes += `<text x="${lx-2}" y="${suY+41+3*16+8}" fill="#8aa0b4" font-size="8">+${ts.length-3} more</text>`;
+    if(!ts.length)
+      nodes += `<text x="${lcx}" y="${suY+54}" text-anchor="middle" fill="#5a6b80" font-size="8.5">미할당 풀</text>`;
+    if(degraded)
+      nodes += `<text x="${lcx}" y="${suY+88}" text-anchor="middle" fill="#f0a3b0" font-size="8">${esc(su.degraded_racks)} rack degraded</text>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"
+    style="font-family:var(--mono);display:block">${links}${nodes}</svg>`;
+}
+
+// ── DPUs (scoped to selectedRack) ─────────────────────────────────────
+async function loadDpus(){
+  await buildRackPicker("dpu-picker");
+  if(!selectedRack){ $("dpus").innerHTML = `<div class="hint">no rack selected</div>`; return; }
+  try{
+    const dpus = await getJSON("/emulator/v1/dpus?rack="+encodeURIComponent(selectedRack));
+    $("dpu-count").textContent = dpus.length;
+    const meta = $("dpu-picker-meta");
+    if(meta) meta.textContent = `${dpus.length} DPU(s) on ${selectedRack}`;
+    $("dpus").innerHTML = dpus.map(d=>{
+      const health = (d.health||"unknown");
+      const tenants = d.tenants||[];
+      const chips = tenants.length
+        ? tenants.map(t=>`<span class="chip">${esc(t)}</span>`).join("")
+        : `<span class="chip none">no tenants</span>`;
+      const sel = (d.dpu_id===selectedDpu) ? " sel" : "";
+      return `<div class="card dpu${sel}" data-id="${esc(d.dpu_id)}">
+        <div class="row">
+          <span class="id">${esc(dpuTail(d.dpu_id))}</span>
+          <span class="dot ${esc(healthCls(health))}" title="${esc(health)}"></span>
+        </div>
+        <div class="meta"><span>mode ${esc(d.operating_mode)}</span>
+          <span>gen ${esc(d.current_policy_generation)}</span></div>
+        <div class="chips">${chips}</div>
+      </div>`;
+    }).join("");
+    document.querySelectorAll("#dpus .dpu").forEach(el=>{
+      el.addEventListener("click",()=>{ selectedDpu = el.getAttribute("data-id");
+        loadDpus(); loadDpuDetail(); });
+    });
+  }catch(e){ $("dpus").innerHTML = `<div class="hint">DPUs unavailable</div>`; }
+}
+
+async function loadDpuDetail(){
+  if(!selectedDpu){ return; }
+  try{
+    const [d, ports] = await Promise.all([
+      getJSON(`/emulator/v1/dpus/${selectedDpu}`),
+      getJSON(`/emulator/v1/dpus/${selectedDpu}/ports`),
+    ]);
+    const m = d.telemetry||{};
+    $("tele-head").innerHTML =
+      `<span class="id">${esc(d.dpu_id)}</span>
+       <span class="dot ${esc(healthCls(d.health))}"></span>
+       <span class="hint">health ${esc(d.health)} · arm_os ${esc(d.arm_os_state)}`
+       + ` · mode ${esc(d.operating_mode)} · gen ${esc(d.current_policy_generation)}`
+       + ` · LKG ${esc(d.last_known_good_generation)}</span>`;
+
+    const keys = ISO_KEYS.filter(k=>k in m).concat(
+      Object.keys(m).filter(k=>!ISO_KEYS.includes(k)));
+    let tele = `<tr><th>Counter</th><th class="num">Value</th></tr>`;
+    tele += keys.map(k=>{
+      const v = m[k];
+      const hot = (String(k).includes("drops")||String(k).includes("failures")) && v>0;
+      return `<tr><td>${esc(k)}</td><td class="num ${hot?'hot':''}">${esc(v)}</td></tr>`;
+    }).join("");
+
+    const fns = ports.functions||[];
+    let ftbl = `<tr><th>Function</th><th>Type</th><th>Tenant</th><th>Oper State</th>`
+      + `<th>Link</th><th>MAC</th></tr>`
+      + (fns.length ? fns.map(f=>
+        `<tr><td>${esc(f.function_id)}</td><td>${esc(f.function_type)}</td>`
+        + `<td>${esc(f.tenant_id||"—")}</td><td>${esc(f.operational_state)}</td>`
+        + `<td>${esc(f.link_state)}</td><td>${esc(f.mac_address||"—")}</td></tr>`).join("")
+        : `<tr><td colspan="6" class="hint">no functions</td></tr>`);
+
+    const reps = ports.representors||[];
+    let rtbl = `<tr><th>Representor</th><th>Netdev</th><th>Switch</th>`
+      + `<th class="num">Port</th><th>Admin</th><th>Oper</th></tr>`
+      + (reps.length ? reps.map(r=>
+        `<tr><td>${esc(r.representor_id)}</td><td>${esc(r.netdev_name)}</td>`
+        + `<td>${esc(r.switch_id)}</td><td class="num">${esc(r.port_index)}</td>`
+        + `<td>${esc(r.admin_state)}</td><td>${esc(r.operational_state)}</td></tr>`).join("")
+        : `<tr><td colspan="6" class="hint">no representors</td></tr>`);
+
+    const fp = d.failure_policy||{};
+    const fpRows = Object.entries(fp).map(([k,v])=>
+      `<div class="kvi"><span class="kk">${esc(k)}</span><span class="vv">${esc(v)}</span></div>`
+    ).join("") || `<div class="hint">none</div>`;
+
+    $("dpu-detail").innerHTML = `
+      <div class="grid2">
+        <div>
+          <h2 style="margin-bottom:8px">Isolation Telemetry</h2>
+          <div class="tbl-wrap"><table>${tele}</table></div>
+        </div>
+        <div>
+          <h2 style="margin-bottom:8px">Failure Policy &amp; Arm OS</h2>
+          <div class="card">
+            <div class="kv">
+              <div class="kvi"><span class="kk">arm_os_state</span><span class="vv">${esc(d.arm_os_state)}</span></div>
+              <div class="kvi"><span class="kk">bmc_state</span><span class="vv">${esc(d.bmc_state)}</span></div>
+              <div class="kvi"><span class="kk">eswitch_mode</span><span class="vv">${esc(d.eswitch_mode)}</span></div>
+              <div class="kvi"><span class="kk">attestation</span><span class="vv">${esc(d.attestation_state)}</span></div>
+              ${fpRows}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="sub-sec" style="margin-top:16px">
+        <h2>Functions (PF / VF / SF) <span class="count">${fns.length}</span></h2>
+        <div class="tbl-wrap"><table>${ftbl}</table></div>
+      </div>
+      <div class="sub-sec">
+        <h2>Representors <span class="count">${reps.length}</span></h2>
+        <div class="tbl-wrap"><table>${rtbl}</table></div>
+      </div>`;
+  }catch(e){ $("dpu-detail").innerHTML = `<div class="hint">DPU detail unavailable</div>`; }
+}
+
+// ── PROVISIONING (scoped to selectedRack) ─────────────────────────────
+function bootIndex(stage){
+  if(stage==="HostReady"||stage==="Host Agent Ready") return BOOT_SEQ.length;
+  const i = BOOT_SEQ.indexOf(stage);
+  return i<0 ? -1 : i;
+}
+function renderPipe(stage){
+  const idx = bootIndex(stage);
+  const pills = BOOT_SEQ.map((s,i)=>{
+    let cls = "pstep";
+    if(idx===BOOT_SEQ.length || (idx>=0 && i<idx)) cls+=" done";
+    else if(i===idx) cls+=" cur";
+    return `<span class="${cls}" title="${esc(s)}"></span>`;
+  }).join("");
+  const label = idx===BOOT_SEQ.length ? "Host Agent Ready"
+              : idx<0 ? (stage||"idle") : stage;
+  return `<span class="pipe">${pills}</span><span class="stage-txt">${esc(label)}</span>`;
+}
+
+// site / SU / rack filter bar + tray search (built once — survives polling)
+function provRackList(){
+  return RACKS.filter(r=>(!provSite||r.site_id===provSite)
+                       &&(!provSu||r.su_id===provSu));
+}
+function syncProvOptions(){
+  const suSel = $("pv-su"), rkSel = $("pv-rack");
+  if(!suSel||!rkSel) return;
+  const sus = [...new Set(RACKS.filter(r=>!provSite||r.site_id===provSite)
+    .map(r=>r.su_id))].sort((a,b)=>parseInt(a.split("-")[1],10)-parseInt(b.split("-")[1],10));
+  if(provSu && !sus.includes(provSu)) provSu = "";
+  suSel.innerHTML = `<option value="">전체 SU</option>` + sus.map(s=>
+    `<option value="${esc(s)}" ${s===provSu?"selected":""}>${esc(s)}</option>`).join("");
+  const list = provRackList();
+  if(list.length && !list.some(r=>r.rack_id===selectedRack))
+    selectedRack = list[0].rack_id;
+  rkSel.innerHTML = list.map(r=>
+    `<option value="${esc(r.rack_id)}" ${r.rack_id===selectedRack?"selected":""}>${esc(r.rack_id)}</option>`
+  ).join("") || `<option value="">no racks</option>`;
+}
+async function buildProvBar(){
+  await ensureRacks();
+  const el = $("prov-picker");
+  if(!el) return;
+  if($("pv-rack")){ syncProvOptions(); return; }   // already built — keep input focus
+  el.innerHTML = `<div class="rackbar">
+    <span class="hint">사이트:</span><select id="pv-site"></select>
+    <span class="hint">SU:</span><select id="pv-su"></select>
+    <span class="hint">Rack:</span><select id="pv-rack"></select>
+    <input id="pv-q" placeholder="tray 검색 (예: tray-07)" value="${esc(provQuery)}">
+    <span class="hint" id="prov-picker-meta"></span></div>`;
+  const sites = [...new Map(RACKS.map(r=>[r.site_id, r.site])).entries()];
+  $("pv-site").innerHTML = `<option value="">전체 사이트</option>` + sites.map(([id,nm])=>
+    `<option value="${esc(id)}" ${id===provSite?"selected":""}>${esc(nm)} · ${esc(id)}</option>`).join("");
+  $("pv-site").addEventListener("change",()=>{
+    provSite = $("pv-site").value; provSu = "";
+    syncProvOptions(); loadProvisioning();
+  });
+  $("pv-su").addEventListener("change",()=>{
+    provSu = $("pv-su").value;
+    syncProvOptions(); loadProvisioning();
+  });
+  $("pv-rack").addEventListener("change",()=>{
+    selectedRack = $("pv-rack").value; selectedTray = null;
+    loadProvisioning();
+  });
+  $("pv-q").addEventListener("input",()=>{
+    provQuery = $("pv-q").value.trim().toLowerCase();
+    renderProvRows();
+  });
+  syncProvOptions();
+}
+
+function renderProvRows(){
+  const trays = provTrays.filter(t=>
+    !provQuery || t.tray_id.toLowerCase().includes(provQuery));
+  $("prov-count").textContent = trays.length;
+  $("prov-table").innerHTML =
+    `<tr><th>Tray</th><th>Power</th><th>Lifecycle</th><th>Boot Progress</th><th>Action</th></tr>`
+    + (trays.map(t=>{
+      const lc = t.lifecycle_state||"", stage = t.boot_stage||"";
+      const provisioning = String(lc).toLowerCase()==="provisioning";
+      const act = provisioning
+        ? `<button class="sm" disabled>Provisioning…</button>`
+        : `<button class="sm" data-prov="${esc(t.tray_id)}">Provision</button>`;
+      return `<tr data-row="${esc(t.tray_id)}" title="클릭 → DPU 기반 IP 할당·OS 설치 상세">
+        <td>${esc(trayShort(t.tray_id))}</td>
+        <td><span class="dot ${powerCls(t.power_state)}"></span> ${esc(t.power_state)}</td>
+        <td data-lc><span class="badge ${lcCls(lc)}">${esc(lc)}</span></td>
+        <td data-stage>${renderPipe(stage)}</td>
+        <td>${act}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="5" class="hint">no trays match "${esc(provQuery)}"</td></tr>`);
+  document.querySelectorAll("#prov-table button[data-prov]").forEach(b=>{
+    b.addEventListener("click",(ev)=>{ ev.stopPropagation();
+      provisionWalk(b.getAttribute("data-prov"), b); });
+  });
+  document.querySelectorAll("#prov-table tr[data-row]").forEach(row=>{
+    row.addEventListener("click",()=>openTrayModal(row.getAttribute("data-row")));
+  });
+
+  $("lease-count").textContent = provLeases.length;
+  $("lease-table").innerHTML =
+    `<tr><th>Hostname</th><th>Tray</th><th>IP</th><th>MAC</th><th>Subnet</th>`
+    + `<th>Gateway</th><th class="num">Lease(s)</th><th>State</th></tr>`
+    + (provLeases.length ? provLeases.map(l=>
+      `<tr><td>${esc(l.hostname)}</td><td>${esc(trayShort(l.tray_id))}</td>`
+      + `<td>${esc(l.ip_address)}</td><td>${esc(l.mac_address)}</td>`
+      + `<td>${esc(l.subnet)}</td><td>${esc(l.gateway)}</td>`
+      + `<td class="num">${esc(l.lease_s)}</td><td>${esc(l.state)}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="hint">no active leases — click Provision on a tray</td></tr>`);
+}
+
+async function loadProvisioning(){
+  loadTrayOps();                             // 트레이 작업 패널은 항상 갱신
+  if(Object.keys(provBusy).length) return;   // don't clobber an in-flight walk
+  await buildProvBar();
+  if(!selectedRack){ $("prov-table").innerHTML = `<div class="hint">no rack selected</div>`; return; }
+  try{
+    const [leases, rk] = await Promise.all([
+      getJSON("/emulator/v1/dhcp/leases"),
+      getJSON("/emulator/v1/cluster/racks/"+encodeURIComponent(selectedRack)),
+    ]);
+    provTrays = rk.tray_detail||[];
+    provLeases = leases;
+    const meta = $("prov-picker-meta");
+    if(meta) meta.textContent = `${provTrays.length} host(s) on ${selectedRack}`;
+    renderProvRows();
+  }catch(e){ $("prov-table").innerHTML = `<div class="hint">provisioning unavailable</div>`; }
+}
+
+function updateProvRow(trayId, stage, lc){
+  const row = document.querySelector(`#prov-table tr[data-row="${CSS.escape(trayId)}"]`);
+  if(!row) return;
+  const st = row.querySelector("[data-stage]");
+  const lce = row.querySelector("[data-lc]");
+  if(st) st.innerHTML = renderPipe(stage);
+  if(lce) lce.innerHTML = `<span class="badge ${lcCls(lc)}">${esc(lc||"")}</span>`;
+}
+
+async function provisionWalk(trayId, btn){
+  if(provBusy[trayId]) return;
+  provBusy[trayId] = true; btn.disabled = true; btn.textContent = "Booting…";
+  try{
+    let r = await getJSON(`/emulator/v1/provision/${trayId}`,
+      {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    updateProvRow(trayId, r.boot_stage, r.lifecycle_state);
+    for(let i=0;i<BOOT_SEQ.length;i++){
+      await sleep(650);
+      r = await getJSON(`/emulator/v1/provision/${trayId}/step`,
+        {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+      updateProvRow(trayId, r.boot_stage, r.lifecycle_state);
+      if(r.complete) break;
+    }
+  }catch(e){
+    btn.textContent = "Error";
+  }finally{
+    delete provBusy[trayId];
+    loadEvents();
+    if(activeSection==="provisioning") loadProvisioning();
+  }
+}
+
+// ── TRAY DETAIL POPUP — DPU 기반 IP 할당 · OS 설치 (요청 1) ────────────
+const PROV_UI_STEPS = [
+  ["PXE 요청", "UEFI 네트워크 부트 — DPU 경유 PXE Discover"],
+  ["DHCP Lease — DPU 기반 IP 할당", "DPU-DHCP 서버가 host lease 발급 · DNS A 레코드 등록"],
+  ["bootfile (iPXE) fetch", "boot.ipxe 스크립트 chainload"],
+  ["OS 이미지 다운로드 · kickstart/cloud-init", "vmlinuz / initrd 스트리밍 · 자동 설치 적용"],
+  ["재부팅", "설치 완료 후 로컬 디스크 부팅"],
+  ["HostReady — Host Agent Ready", "lifecycle Ready · NICo 등록 완료"],
+];
+function stepperHTML(boot){
+  const i = boot.stage_index, complete = !!boot.complete;
+  return `<div class="vsteps">` + PROV_UI_STEPS.map(([t,d],k)=>{
+    let cls = "";
+    if(complete || (i>=0 && k<i)) cls = "done";
+    else if(i>=0 && k===i) cls = "cur";
+    const tag = cls==="done"?"완료":cls==="cur"?"진행 중":"대기";
+    return `<div class="vstep ${cls}"><span class="sdot"></span>
+      <div><div class="sl">${esc(t)}<span class="stag">${tag}</span></div>
+      <div class="sm2">${esc(d)}</div></div></div>`;
+  }).join("") + `</div>`;
+}
+const kvi = (k,v)=>`<div class="kvi"><span class="kk">${esc(k)}</span>`
+  + `<span class="vv">${esc(v==null||v===""?"—":v)}</span></div>`;
+
+function renderTrayModal(d, op){
+  const t = d.tray, dp = d.dpu, ip = d.ip_allocation, boot = d.boot;
+  $("tm-title").textContent = t.tray_id;
+  $("tm-badges").innerHTML =
+    `<span class="badge ${lcCls(t.lifecycle_state)}">${esc(t.lifecycle_state)}</span>`
+    + `<span class="dot ${powerCls(t.power_state)}" title="Power ${esc(t.power_state)}"></span>`
+    + `<span class="hint">${esc(t.rack_id)} · ${esc(t.site)}</span>`;
+  const lease = ip.lease;
+  const leaseRows = lease
+    ? kvi("Host IP (DHCP lease)", lease.ip_address)
+      + kvi("DHCP 서버", lease.dhcp_server||ip.dhcp_server)
+      + kvi("Lease 시간", lease.lease_s+"s")
+      + kvi("Lease 상태", lease.state)
+      + kvi("할당 시각", lease.allocated_at)
+    : `<div class="hint" style="padding:6px 0">활성 DHCP lease 없음 — 재프로비저닝 실행 시 `
+      + `DPU-DHCP가 lease를 발급합니다.</div>`;
+  const dnsRows = (ip.dns_records||[]).map(r=>
+    `<tr><td>${esc(r.hostname)}</td><td>${esc(r.type)}</td><td>${esc(r.address)}</td>`
+    + `<td class="num">${esc(r.ttl)}</td><td>${esc(r.scope||"")}</td></tr>`).join("");
+  const powerBtn = t.power_state==="Off"
+    ? `<button class="sm" id="tm-power" data-rt="On">전원 On (Redfish)</button>`
+    : `<button class="sm ghost" id="tm-power" data-rt="ForceOff">전원 Off (Redfish ForceOff)</button>`;
+  $("tm-body").innerHTML = `<div class="grid2">
+    <div>
+      <h2 style="margin-bottom:8px">현재 상태 요약</h2>
+      <div class="kv" style="grid-template-columns:1fr 1fr">
+        ${kvi("Power", t.power_state)}${kvi("Health", t.health)}
+        ${kvi("Lifecycle", t.lifecycle_state)}${kvi("GPUs", t.gpus)}
+        ${kvi("Tenant", (t.tenants||[]).join(", ")||"—")}${kvi("BMC IP", t.bmc_ip)}
+        ${kvi("Serial", t.serial)}${kvi("Host MAC", t.mac)}
+      </div>
+      <div class="mact">
+        ${powerBtn}
+        <button class="sm" id="tm-reprov">재프로비저닝</button>
+        <button class="sm ghost" id="tm-reboot" data-akey="tm:reboot">재기동</button>
+        <button class="sm dgr" id="tm-replace" data-akey="tm:replace">HW 교체</button>
+        <span class="hint">(데모 · 2단계 확인)</span>
+        <span class="ctl-warn" id="tm-msg"></span>
+      </div>
+      <h2 style="margin:14px 0 8px">DPU 기반 IP 할당</h2>
+      <div class="kv" style="grid-template-columns:1fr">
+        ${kvi("담당 DPU", dp.dpu_id)}
+        ${kvi("DPU mode", (dp.operating_mode||"—")+" · arm_os "+(dp.arm_os_state||"—"))}
+        ${kvi("DPU OOB MAC", dp.oob_mac)}${kvi("DPU BMC IP", dp.bmc_ip)}
+        ${kvi("Host MAC", ip.host_mac)}${kvi("DHCP 서버 (DPU)", ip.dhcp_server)}
+        ${kvi("Gateway / Subnet", ip.gateway+" / "+ip.subnet)}
+        ${leaseRows}
+      </div>
+      <h2 style="margin:14px 0 8px">DNS 등록 <span class="hint">(${esc(ip.domain)})</span></h2>
+      <div class="tbl-wrap"><table>
+        <tr><th>Hostname</th><th>Type</th><th>Address</th><th class="num">TTL</th><th>Scope</th></tr>
+        ${dnsRows}
+      </table></div>
+    </div>
+    <div>
+      ${op
+        ? `<h2 style="margin-bottom:8px">트레이 작업 진행 — ${esc(op.op==="reboot"?"재기동":"HW 교체")}
+             <span class="count">${esc(op.stage_idx+1)}/${esc(op.stages.length)}</span></h2>
+           <div class="hint" style="margin-bottom:12px">op <b style="color:var(--text)">${esc(op.op)}</b>
+             · tenant ${esc(op.tenant_id||"—")} · 경과 ${esc(op.elapsed_s)}s · tick당 1단계</div>
+           ${opStepsHTML(op)}`
+        : `<h2 style="margin-bottom:8px">OS 설치 / 부트 단계</h2>
+           <div class="hint" style="margin-bottom:12px">boot_stage
+             <b style="color:var(--text)">${esc(boot.boot_stage)}</b>
+             · boot_source ${esc(boot.boot_source)} (${esc(boot.boot_enabled)})</div>
+           ${stepperHTML(boot)}`}
+      <div class="hint" style="margin-top:14px;font-family:var(--mono);word-break:break-all">
+        bootfile: ${esc(boot.bootfile_url)}<br>image: ${esc(boot.image_url)}</div>
+    </div>
+  </div>`;
+  const pb = $("tm-power");
+  if(pb) pb.addEventListener("click",()=>tmPower(pb.getAttribute("data-rt")));
+  const rb = $("tm-reprov");
+  if(rb){
+    if(provBusy[t.tray_id] || op){ rb.disabled = true;
+      if(provBusy[t.tray_id]) rb.textContent = "Provisioning…"; }
+    else rb.addEventListener("click",()=>tmReprovision(rb));
+  }
+  [[$("tm-reboot"),"reboot"],[$("tm-replace"),"replace"]].forEach(([b,kind])=>{
+    if(!b) return;
+    if(op){ b.disabled = true; return; }        // 작업 진행 중 재실행 방지
+    b.addEventListener("click",()=>confirmThen(b, $("tm-msg"),
+      "주의(데모): 트레이 "+(kind==="reboot"?"재기동":"HW 교체")
+      + " — 테넌트 GPU가 일시 unavail 됩니다. 3초 내 재클릭 시 실행.",
+      ()=>trayOpStart(t.tray_id, kind)));
+  });
+}
+
+// 트레이 작업(재기동/HW 교체) 단계 스텝퍼 — 팝업 우측
+function opStepsHTML(op){
+  return `<div class="vsteps">` + (op.stages||[]).map(s=>{
+    const cls = s.status==="done" ? "done" : s.status==="running" ? "cur" : "";
+    const tag = s.status==="done"
+      ? "완료"+(s.duration_s!=null?" · "+s.duration_s+"s":"")
+      : s.status==="running" ? "진행 중"
+      : s.status==="skipped" ? "건너뜀 — tenant 없음" : "대기";
+    return `<div class="vstep ${cls}"><span class="sdot"></span>
+      <div><div class="sl">${esc(s.name)}<span class="stag">${esc(tag)}</span></div></div></div>`;
+  }).join("") + `</div>`;
+}
+
+async function openTrayModal(trayId){
+  trayModalId = trayId;
+  $("modal-tray").classList.add("open");
+  $("tm-title").textContent = trayId;
+  $("tm-badges").innerHTML = "";
+  $("tm-body").innerHTML = `<div class="hint">loading…</div>`;
+  await refreshTrayModal();
+}
+
+async function refreshTrayModal(){
+  if(!trayModalId) return;
+  if(Object.keys(ARMED).length) return;   // 2단계 확인 중 재렌더 방지
+  const id = trayModalId;
+  try{
+    const [d] = await Promise.all([
+      getJSON(`/emulator/v1/provision/${encodeURIComponent(id)}/detail`),
+      loadTrayOps(),
+    ]);
+    const op = ((TRAYOPS&&TRAYOPS.inflight)||[]).find(o=>o.tray_id===id);
+    if(trayModalId===id) renderTrayModal(d, op);
+  }catch(e){
+    if(trayModalId===id)
+      $("tm-body").innerHTML = `<div class="hint">tray detail unavailable — ${esc(e.message)}</div>`;
+  }
+}
+
+async function tmPower(resetType){
+  if(!trayModalId) return;
+  const msg = $("tm-msg");
+  try{
+    const r = await getJSON(
+      `/redfish/v1/Systems/${encodeURIComponent(trayModalId)}/Actions/ComputerSystem.Reset`,
+      {method:"POST", headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({ResetType:resetType})});
+    if(msg) msg.textContent = `Redfish ${resetType} → ${r.status} · PowerState ${r.PowerState}`;
+  }catch(e){ if(msg) msg.textContent = "reset failed: "+e.message; }
+  await refreshTrayModal();
+  if(activeSection==="provisioning" && !Object.keys(provBusy).length) loadProvisioning();
+}
+
+async function tmReprovision(btn){
+  const id = trayModalId;
+  if(!id || provBusy[id]) return;
+  provBusy[id] = true; btn.disabled = true; btn.textContent = "Provisioning…";
+  try{
+    let r = await getJSON(`/emulator/v1/provision/${encodeURIComponent(id)}`,
+      {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    updateProvRow(id, r.boot_stage, r.lifecycle_state);
+    if(trayModalId===id) await refreshTrayModal();
+    for(let i=0;i<BOOT_SEQ.length;i++){
+      await sleep(650);
+      r = await getJSON(`/emulator/v1/provision/${encodeURIComponent(id)}/step`,
+        {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+      updateProvRow(id, r.boot_stage, r.lifecycle_state);
+      if(trayModalId===id) await refreshTrayModal();
+      if(r.complete) break;
+    }
+  }catch(e){
+    const msg = $("tm-msg");
+    if(msg) msg.textContent = "provision failed: "+e.message;
+  }finally{
+    delete provBusy[id];
+    loadEvents();
+    if(activeSection==="provisioning") loadProvisioning();
+    if(trayModalId===id) refreshTrayModal();
+  }
+}
+
+// ── 트레이 작업 (재기동·HW 교체) — trayops 수명주기 + KPI (기능 2) ────
+let TRAYOPS = null;               // latest GET /emulator/v1/obs/tray-ops
+const trayOpBusy = {};            // tray_id -> walk polling running
+
+async function loadTrayOps(){
+  try{
+    TRAYOPS = await getJSON("/emulator/v1/obs/tray-ops");
+    renderTrayOps();
+  }catch(e){ /* trayops 미가용 시 패널 유지 */ }
+  return TRAYOPS;
+}
+
+function opBarHTML(o){
+  const pills = (o.stages||[]).map(s=>{
+    let cls = "pstep";
+    if(s.status==="done"||s.status==="skipped") cls += " done";
+    else if(s.status==="running") cls += " cur";
+    return `<span class="${cls}" title="${esc(s.name)} · ${esc(s.status)}`
+      + `${s.duration_s!=null?" · "+esc(s.duration_s)+"s":""}"></span>`;
+  }).join("");
+  return `<span class="pipe">${pills}</span>`
+    + `<span class="stage-txt">${esc(o.stage)} (${esc(o.stage_idx+1)}/${esc(o.stages.length)})</span>`;
+}
+
+function renderTrayOps(){
+  const d = TRAYOPS;
+  if(!d || !$("tops-kpi")) return;
+  const k = d.kpi||{};
+  const infl = d.inflight||[];
+  $("tops-count").textContent = infl.length;
+  $("tops-kpi").innerHTML = [
+    ["ops(24h)", k.ops_24h], ["reboot", k.reboots], ["replace", k.replacements],
+    ["MTTR 평균", (k.avg_total_s==null?"—":k.avg_total_s)+"s"],
+    ["discovery", (k.avg_discovery_s==null?"—":k.avg_discovery_s)+"s"],
+    ["IP 할당", (k.avg_ip_s==null?"—":k.avg_ip_s)+"s"],
+    ["OS 설치", (k.avg_os_install_s==null?"—":k.avg_os_install_s)+"s"],
+    ["rejoin", (k.avg_rejoin_s==null?"—":k.avg_rejoin_s)+"s"],
+    ["rejoin 성공", (k.rejoin_success_pct==null?"—":k.rejoin_success_pct)+"%"],
+  ].map(([kk,v])=>`<span class="suchip"><b>${esc(v==null?"—":v)}</b> ${esc(kk)}</span>`).join("");
+  $("tops-inflight").innerHTML = infl.length ? infl.map(o=>
+    `<div class="card" style="margin-bottom:8px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="font-family:var(--mono);color:var(--green)">${esc(o.tray_id)}</span>
+        <span class="badge provisioning">${esc(o.op)}</span>
+        <span class="hint">tenant ${esc(o.tenant_id||"—")} · 경과 ${esc(o.elapsed_s)}s</span>
+        ${opBarHTML(o)}
+      </div></div>`).join("")
+    : `<div class="hint">진행 중인 트레이 작업 없음 — 위 트레이 행 클릭 → 팝업에서 재기동/HW 교체 실행 (데모)</div>`;
+  const hist = d.history||[];
+  $("tops-history").innerHTML =
+    `<tr><th>At</th><th>Tray</th><th>Op</th><th>Tenant</th>`
+    + `<th class="num">Total s</th><th>Rejoin</th><th>결과</th></tr>`
+    + (hist.length ? hist.map(h=>
+      `<tr><td>${esc(h.at)}</td>`
+      + `<td style="font-family:var(--mono)">${esc(trayShort(h.tray_id))}`
+      + `${h.note?` <span class="hint">${esc(h.note)}</span>`:""}</td>`
+      + `<td>${esc(h.op)}</td><td>${esc(h.tenant_id||"—")}</td>`
+      + `<td class="num">${esc(h.total_s)}</td>`
+      + `<td>${(h.stage_durations&&("tenant_rejoin" in h.stage_durations))
+          ? esc(h.stage_durations.tenant_rejoin)+"s"
+          : '<span class="hint">skip</span>'}</td>`
+      + `<td>${h.succeeded?'<span class="badge ready">ok</span>'
+                          :'<span class="badge degraded">fail</span>'}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="hint">트레이 작업 이력 없음</td></tr>`);
+}
+
+async function trayOpStart(id, kind){
+  if(trayOpBusy[id]) return;
+  const msg = $("tm-msg");
+  try{
+    await getJSON(`/emulator/v1/trayops/${encodeURIComponent(id)}/${kind}`,
+      {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if(msg) msg.textContent = (kind==="reboot"?"재기동":"HW 교체")+" 시작 — 단계 진행 중…";
+  }catch(e){ if(msg) msg.textContent = "실패: "+e.message; return; }
+  trayOpBusy[id] = true;
+  try{
+    for(let i=0;i<60;i++){                 // 진행 폴링 — 팝업 스텝퍼 실시간 갱신
+      await sleep(1300);
+      await loadTrayOps();
+      if(trayModalId===id) await refreshTrayModal();
+      const infl = ((TRAYOPS&&TRAYOPS.inflight)||[]).find(o=>o.tray_id===id);
+      if(!infl) break;
+    }
+  }finally{
+    delete trayOpBusy[id];
+    loadEvents();
+    if(activeSection==="provisioning" && !Object.keys(provBusy).length) loadProvisioning();
+    if(trayModalId===id) refreshTrayModal();
+  }
+}
+
+// ── SCENARIOS ─────────────────────────────────────────────────────────
+async function loadScenarios(){
+  if(scenariosLoaded) return;
+  try{
+    const list = await getJSON("/emulator/v1/scenarios");
+    $("scn-count").textContent = list.length;
+    $("scenarios").innerHTML = list.map(s=>`
+      <div class="scenario" data-name="${esc(s.name)}">
+        <div class="top">
+          <div>
+            <span class="name">${esc(s.title)}</span>
+            <span class="sev ${esc(s.severity)}">${esc(s.severity)}</span>
+            <span class="sev">${esc(s.category)}</span>
+            <div class="desc">${esc(s.description)}</div>
+          </div>
+          <button data-run="${esc(s.name)}">Run</button>
+        </div>
+        <div class="result" id="res-${esc(s.name)}"></div>
+      </div>`).join("");
+    document.querySelectorAll("button[data-run]").forEach(b=>{
+      b.addEventListener("click",()=>runScenario(b.getAttribute("data-run"), b));
+    });
+    scenariosLoaded = true;
+  }catch(e){ $("scenarios").innerHTML = `<div class="hint">scenarios unavailable</div>`; }
+}
+
+async function runScenario(name, btn){
+  if(busy[name]) return;
+  busy[name] = true; btn.disabled = true; btn.textContent = "Running…";
+  const box = $("res-"+name);
+  try{
+    const body = selectedDpu ? JSON.stringify({dpu_id:selectedDpu}) : "{}";
+    const r = await getJSON(`/emulator/v1/scenarios/${name}/run`,
+      {method:"POST", headers:{"Content-Type":"application/json"}, body});
+    const verdict = r.passed
+      ? `<span class="verdict pass">PASSED</span>`
+      : `<span class="verdict fail">FAILED</span>`;
+    const asserts = (r.assertions||[]).map(a=>
+      `<div class="assert ${a.ok?'ok':'no'}"><span class="mk">${a.ok?'✔':'✗'}</span>${esc(a.expr)}</div>`
+    ).join("");
+    const delta = Object.keys(r.telemetry_delta||{}).length
+      ? `<div class="delta">telemetry Δ: ` + Object.entries(r.telemetry_delta)
+          .map(([k,v])=>`${esc(k)} <b>${v>0?'+':''}${esc(v)}</b>`).join(" · ") + `</div>`
+      : "";
+    box.innerHTML = `<div>${verdict} <span class="hint">on ${esc(r.dpu_id)} · `
+      + `${r.assertions.filter(a=>a.ok).length}/${r.assertions.length} assertions</span></div>`
+      + `<div style="margin-top:8px">${asserts}</div>${delta}`;
+    box.classList.add("show");
+    loadEvents();
+  }catch(e){
+    box.innerHTML = `<span class="verdict fail">ERROR</span> <span class="hint">${esc(e.message)}</span>`;
+    box.classList.add("show");
+  }finally{
+    busy[name] = false; btn.disabled = false; btn.textContent = "Run";
+  }
+}
+
+// ── EVENTS ────────────────────────────────────────────────────────────
+async function loadEvents(){
+  try{
+    const evs = await getJSON("/emulator/v1/events?limit=40");
+    $("ev-count").textContent = evs.length;
+    $("events").innerHTML = evs.map(e=>{
+      const sev = (e.severity||"info");
+      const cls = sev==="critical"?"critical":sev==="warning"?"warning":"ok";
+      const args = (e.args&&e.args.length)?` <span class="args">[${esc(e.args.join(", "))}]</span>`:"";
+      return `<div class="ev"><span class="sev ${cls}">${esc(sev)}</span>`
+        + `<span class="msg">${esc(e.message_id)}${args}</span></div>`;
+    }).join("") || `<div class="hint">no events</div>`;
+  }catch(e){ $("events").innerHTML = `<div class="hint">events unavailable</div>`; }
+}
+
+// ── navigation + polling ──────────────────────────────────────────────
+function switchSection(name){
+  activeSection = name;
+  document.querySelectorAll("nav.tabs button").forEach(b=>
+    b.classList.toggle("active", b.getAttribute("data-sec")===name));
+  document.querySelectorAll("section.view").forEach(s=>
+    s.classList.toggle("active", s.id==="view-"+name));
+  loadSection(name);
+}
+
+async function loadSection(s){
+  if(s==="sites") return loadSites();
+  if(s==="cluster") return loadCluster();
+  if(s==="rack") return loadRack();
+  if(s==="fabric") return loadFabric();
+  if(s==="storage") return loadStorage();
+  if(s==="dpus"){ await loadDpus(); return loadDpuDetail(); }
+  if(s==="provisioning") return loadProvisioning();
+  if(s==="scenarios") return loadScenarios();
+}
+
+async function poll(){
+  await Promise.all([loadHealth(), loadTwin()]);
+  await loadSection(activeSection);
+  $("footer").textContent = "last updated " + new Date().toLocaleTimeString()
+    + " · section: " + activeSection + " · polling every 4s · NICo Emulator — site-local control plane";
+}
+
+document.querySelectorAll("nav.tabs button").forEach(b=>{
+  b.addEventListener("click",()=>switchSection(b.getAttribute("data-sec")));
+});
+
+// ── modal infra (팝업 열기/닫기) ──────────────────────────────────────
+function closeModal(id){
+  const m = $(id);
+  if(m) m.classList.remove("open");
+  if(id==="modal-tray") trayModalId = null;
+}
+document.querySelectorAll(".mbk").forEach(m=>{
+  m.addEventListener("click",e=>{ if(e.target===m) closeModal(m.id); });
+});
+document.querySelectorAll("button[data-close]").forEach(b=>{
+  b.addEventListener("click",()=>closeModal(b.getAttribute("data-close")));
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){ closeModal("modal-tray"); closeModal("modal-topo"); }
+});
+
+// deep links (시연용): #tray=<tray_id> → 트레이 상세 팝업 · #topo=<site_id> → 토폴로지 팝업
+// · #sec=<section> → 탭 직행 (예: #sec=storage)
+(function(){
+  const mt = location.hash.match(/tray=([^&]+)/);
+  const mo = location.hash.match(/topo=([^&]+)/);
+  const ms = location.hash.match(/sec=([a-z]+)/);
+  if(mt) setTimeout(()=>{ switchSection("provisioning");
+    openTrayModal(decodeURIComponent(mt[1])); }, 700);
+  else if(mo) setTimeout(()=>{ switchSection("fabric");
+    openTopoModal(decodeURIComponent(mo[1])); }, 700);
+  else if(ms) setTimeout(()=>switchSection(ms[1]==="control"?"cluster":ms[1]), 400);
+})();
+
+poll();
+setInterval(poll, 4000);
+</script>
+</body>
+</html>
