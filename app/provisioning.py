@@ -106,9 +106,12 @@ def release_lease(tray_id: str):
 
 # ── Provisioning / boot state machine ─────────────────────────────────
 @router.post("/provision/{tray_id}")
-def provision(tray_id: str):
+def provision(tray_id: str, planned: bool = False):
     """Start provisioning a compute tray: allocate a DHCP lease and enter the
     PXE boot state machine.
+
+    planned=True (신규 개통 워크플로우)는 재프로비저닝을 장애로 취급하지
+    않는다 — 오케스트레이션(NICo)이 의도한 프로비저닝이기 때문.
 
     이미 HostReady까지 도달했던 트레이(Ready/InService)의 재프로비저닝은
     계획되지 않은 장애로 취급한다: health=warning, critical 이벤트 발행,
@@ -116,7 +119,8 @@ def provision(tray_id: str):
     with STORE.lock:
         tray = _tray(tray_id)
         prev_lc, prev_stage = tray.lifecycle_state, tray.boot_stage
-        reprovision = (prev_stage in (READY_STAGE, "Host Agent Ready")
+        reprovision = (not planned
+                       and prev_stage in (READY_STAGE, "Host Agent Ready")
                        and prev_lc in ("Ready", "InService"))
         lease = _make_lease(tray)
         STORE.dhcp_leases[tray_id] = lease
