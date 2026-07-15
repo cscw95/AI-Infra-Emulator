@@ -1,7 +1,7 @@
 # AI Infra Emulator — Vera Rubin NVL72 Physical Digital Twin 
 
 > **분리 이력**: 이 프로젝트는 [NeoCloud OS Control-Plane(nocp)](https://github.com/cscw95/NeoCloud-Control-Plane)
-> 내부의 NICo 에뮬레이션 기능을 **독립 신규 기능으로 분리**한 저장소다.
+> 내부의 AI Infra 에뮬레이션 기능을 **독립 신규 기능으로 분리**한 저장소다.
 > NICo Emulator(:9000)가 이 서비스(:9100)를 REST로 드라이브하고, nocp은 `AI_INFRA_URL`로 물리 토폴로지를 조회한다.
 
 Standalone emulator of the **NVIDIA Infra Controller (NICo)** control-plane surface
