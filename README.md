@@ -1,8 +1,8 @@
-# DSX OS NICo Emulator — Vera Rubin NVL72 Digital Twin
+# AI Infra Emulator — Vera Rubin NVL72 Physical Digital Twin (:9100)
 
 > **분리 이력**: 이 프로젝트는 [NeoCloud OS Control-Plane(nocp)](https://github.com/cscw95/NeoCloud-Control-Plane)
 > 내부의 NICo 에뮬레이션 기능을 **독립 신규 기능으로 분리**한 저장소다.
-> nocp은 `NOCP_NICO_URL`로 이 서비스(:9000)의 `/nico-bridge`에 접속해 실연동한다.
+> NICo Emulator(:9000)가 이 서비스(:9100)를 REST로 드라이브하고, nocp은 `AI_INFRA_URL`로 물리 토폴로지를 조회한다.
 
 Standalone emulator of the **NVIDIA Infra Controller (NICo)** control-plane surface
 and a **Vera Rubin NVL72 rack digital twin**, with DPU-enforced tenant isolation.
@@ -15,7 +15,7 @@ It is an **independent service** (not part of NOCP) and integrates with the exis
 ## Quick Start
 
 ```bash
-bash run.sh        # http://127.0.0.1:9000  (dashboard at /, OpenAPI at /docs)
+bash run.sh        # http://127.0.0.1:9100  (dashboard at /, OpenAPI at /docs)
 ```
 
 Uses the NOCP virtualenv by default (`~/nocp/.venv`); set `PYTHON=...` to override.
@@ -39,7 +39,7 @@ switch trays, power shelves, CDU).
 ## Built-in fault scenarios (design §12)
 
 ```bash
-curl -X POST http://127.0.0.1:9000/emulator/v1/scenarios/inter-tenant-isolation/run -d '{}'
+curl -X POST http://127.0.0.1:9100/emulator/v1/scenarios/inter-tenant-isolation/run -d '{}'
 ```
 
 | name | validates |
@@ -52,23 +52,25 @@ curl -X POST http://127.0.0.1:9000/emulator/v1/scenarios/inter-tenant-isolation/
 
 Each scenario drives the real isolation engine and returns `{passed, steps, assertions, telemetry_delta}`.
 
-## Integration with NeoCloud OS (NOCP)
+## Integration with the stack
 
-The emulator exposes `/nico-bridge`, which implements the same REST contract NOCP's
-`NicoHttpAdapter` speaks (`/hosts`, `/instances`, `/jobs` with NicoHost/NicoJob shapes).
-Point NOCP's compute adapter at the emulator:
+This service owns the **physical plane** (rack twin, DPU isolation, fabric,
+telemetry). It does not talk to NOCP directly — the [NICo Emulator](https://github.com/cscw95/NICo-Emulator)
+(:9000) drives it over REST (`AI_INFRA_URL=http://127.0.0.1:9100`), and NOCP's
+compute adapter points at the NICo Emulator's `/nico-bridge`:
 
 ```bash
-# in the nocp repo
-NOCP_NICO_URL=http://127.0.0.1:9000/nico-bridge ./run.sh
+bash run.sh                                              # ① this service (:9100)
+cd ~/nico-emulator && bash run.sh                        # ② NICo Emulator (:9000)
+cd ~/nocp && NOCP_NICO_URL=http://127.0.0.1:9000/nico-bridge ./run.sh   # ③ NOCP (:8000)
 ```
 
 NOCP's provisioning lifecycle (reserve → provision → allocate → cordon → sanitize)
-then drives the emulator's twin and DPU isolation engine. An end-to-end proof using
+then drives this twin and the DPU isolation engine end-to-end. An end-to-end proof using
 NOCP's *actual* adapter code:
 
 ```bash
-# with the emulator running on :9000
+# with the emulator running on :9100
 cd ~/nocp && PYTHONPATH=. .venv/bin/python scripts/integrate_emulator.py   # 7 PASS
 ```
 
