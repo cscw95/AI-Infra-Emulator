@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NICo Emulator — Site-Local NICo Control Plane</title>
+<title>AI Infra Emulator — Vera Rubin NVL72 Digital Twin</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f1722'/%3E%3Crect x='3' y='3' width='10' height='4' rx='1' fill='%2376b900'/%3E%3Crect x='3' y='9' width='10' height='4' rx='1' fill='%2376b900'/%3E%3C/svg%3E">
 
 <style>
@@ -315,26 +315,24 @@
 <body>
 <header>
   <div>
-    <div class="title">NICo Emulator <span class="accent">— Site-Local NICo Control Plane</span></div>
-    <div class="sub" id="sub">Per-site NICo instances · NICo Core + REST + Temporal + site-agent + Rack/Machine controllers · Vera Rubin NVL72 twin</div>
+    <div class="title">AI Infra Emulator <span class="accent">— Vera Rubin NVL72 Digital Twin</span></div>
+    <div class="sub" id="sub">물리 트윈 · Compute/DCGM · VAST Storage · UFM/IB · NetQ/Converged · SMCI DLC · DPU/BlueField · Redfish BMC · NICo Emulator(:9000)가 제어</div>
   </div>
   <div id="health"><span class="pill">connecting…</span></div>
 </header>
 
 <nav class="tabs" id="tabs">
-  <button data-sec="sites" class="primary active">Site Controllers</button>
-  <button data-sec="cluster">Twin Control</button>
+  <button data-sec="cluster" class="primary active">Twin Control</button>
   <button data-sec="rack">Rack</button>
   <button data-sec="fabric">Fabric</button>
   <button data-sec="storage">Storage</button>
   <button data-sec="dpus">DPUs</button>
   <button data-sec="provisioning">Provisioning</button>
-  <button data-sec="scenarios">Scenarios</button>
 </nav>
 
 <main>
   <!-- SITE CONTROLLERS (primary) -->
-  <section class="view active" id="view-sites">
+  <section class="view" id="view-sites" style="display:none">
     <div class="sub-sec">
       <h2>NICo Instances <span class="count" id="sites-count">0</span>
         <span class="hint">— one site-local NICo control-plane instance per site (independent)</span></h2>
@@ -353,7 +351,7 @@
   </section>
 
   <!-- CLUSTER / TWIN CONTROL -->
-  <section class="view" id="view-cluster">
+  <section class="view active" id="view-cluster">
     <div class="sub-sec">
       <h2 style="font-size:15px">NVIDIA Vera Rubin NVL72 — Digital Twin Control
         <span class="hint">— 전체 클러스터 140랙 설정·제어 (power / cap / workload / cordon) · 실텔레메트리 반영</span></h2>
@@ -547,7 +545,7 @@
 <script>
 "use strict";
 const $ = (id)=>document.getElementById(id);
-let activeSection = "sites";
+let activeSection = "cluster";
 let selectedDpu = null;
 let selectedTray = null;
 let selectedRack = null;      // rack_id for Rack / Provisioning / DPUs views
@@ -2342,21 +2340,19 @@ function switchSection(name){
 }
 
 async function loadSection(s){
-  if(s==="sites") return loadSites();
   if(s==="cluster") return loadCluster();
   if(s==="rack") return loadRack();
   if(s==="fabric") return loadFabric();
   if(s==="storage") return loadStorage();
   if(s==="dpus"){ await loadDpus(); return loadDpuDetail(); }
   if(s==="provisioning") return loadProvisioning();
-  if(s==="scenarios") return loadScenarios();
 }
 
 async function poll(){
   await Promise.all([loadHealth(), loadTwin()]);
   await loadSection(activeSection);
   $("footer").textContent = "last updated " + new Date().toLocaleTimeString()
-    + " · section: " + activeSection + " · polling every 4s · NICo Emulator — site-local control plane";
+    + " · section: " + activeSection + " · polling every 4s · AI Infra Emulator — 물리 트윈/장비";
 }
 
 document.querySelectorAll("nav.tabs button").forEach(b=>{
