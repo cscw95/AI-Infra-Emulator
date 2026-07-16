@@ -1934,7 +1934,11 @@ async function loadProvisioning(){
       getJSON("/emulator/v1/cluster/racks/"+encodeURIComponent(selectedRack)),
     ]);
     provTrays = rk.tray_detail||[];
-    provLeases = leases;
+    // DHCP 리스 표를 선택된 랙으로 스코프한다. /dhcp/leases 는 전체 fleet(전역)을
+    // 반환하므로, 상단 부트 상태 표(선택 랙 기준)와 어긋나지 않도록 이 랙의
+    // tray 집합에 속한 리스만 남긴다. (rack-id 문자열 포맷에 의존하지 않음)
+    const trayIds = new Set(provTrays.map(t=>t.tray_id));
+    provLeases = (leases||[]).filter(l=>trayIds.has(l.tray_id));
     const meta = $("prov-picker-meta");
     if(meta) meta.textContent = `${provTrays.length} host(s) on ${selectedRack}`;
     renderProvRows();
