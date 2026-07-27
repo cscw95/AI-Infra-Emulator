@@ -1,23 +1,25 @@
-"""Converged Network 플레인 에뮬레이터 — VR NVL72 converged rail(스토리지·
-관리 N-S 트래픽)을 테넌트 스토리지 경로 수준으로 에뮬레이션한다
+"""Converged Network plane emulator — emulates the VR NVL72 converged rail
+(storage / management N-S traffic) at the tenant storage-path level
 (prefix /converged/v1).
 
-Confirmed (공개 규격):
-  - GB300 NVL72 Enterprise RA: 컴퓨트 트레이당 E-W(GPU rail)는 ConnectX
-    SuperNIC, N-S "converged"(스토리지+클라우드/관리)는 BlueField DPU
-    dual-port 담당 — E-W/N-S 역할 분리 (docs.nvidia.com NVL72 AI Factory RA)
-  - Vera Rubin 플랫폼: ConnectX-9 SuperNIC(1.6Tb/s), BlueField-4(64-core,
-    CX-9 co-packaged, 800Gb/s) 발표 (NVIDIA Newsroom, CES 2026)
-  - Spectrum-X Ethernet: per-packet adaptive routing + ECN/PFC 기반
-    congestion control, effective bandwidth ~95% 주장 (NVIDIA whitepaper)
-Assumption (비공개·미확정 — 임의 정합값):
-  - VR NVL72 트레이당 converged rail 경로: CX-9 dual-port 일부 + BF-4 경유
-    스토리지 경로 2 + 관리 경로 1 (GB300 BF-3 dual-port 패턴 유추)
-  - 경로당 400Gb/s(800G dual-port 반분), oversubscription 1.5:1
-  - latency/ECN/PFC 기준치, 혼잡 시 파형
-동작: ufm/netq와 동일한 tick 캐시 패턴(TICK_SEC). 테넌트 스토리지 경로는
-STORE attachment에서 파생(vast.py와 동일 축), VNI 세그먼트는
-STORE.tenant_networks에서 파생. STORE.seed_gen 변경(리셋) 시 재구축."""
+Confirmed (public spec):
+  - GB300 NVL72 Enterprise RA: per compute tray, E-W (GPU rail) is handled by
+    the ConnectX SuperNIC and the N-S "converged" (storage + cloud/management)
+    by the BlueField DPU dual-port — E-W/N-S role split (docs.nvidia.com NVL72
+    AI Factory RA)
+  - Vera Rubin platform: ConnectX-9 SuperNIC (1.6Tb/s), BlueField-4 (64-core,
+    CX-9 co-packaged, 800Gb/s) announced (NVIDIA Newsroom, CES 2026)
+  - Spectrum-X Ethernet: per-packet adaptive routing + ECN/PFC-based
+    congestion control, claimed effective bandwidth ~95% (NVIDIA whitepaper)
+Assumption (non-public / undetermined — arbitrary consistent values):
+  - Per-tray converged rail paths on VR NVL72: part of the CX-9 dual-port +
+    2 storage paths via BF-4 + 1 management path (inferred from the GB300 BF-3
+    dual-port pattern)
+  - 400Gb/s per path (half of an 800G dual-port), oversubscription 1.5:1
+  - latency/ECN/PFC thresholds, waveform under congestion
+Behavior: same tick-cache pattern as ufm/netq (TICK_SEC). Tenant storage paths
+are derived from STORE attachments (same axis as vast.py); VNI segments are
+derived from STORE.tenant_networks. Rebuilt on STORE.seed_gen change (reset)."""
 import itertools
 import time
 import zlib
@@ -33,13 +35,13 @@ router = APIRouter(prefix="/converged/v1", tags=["converged"])
 
 TICK_SEC = 2.5
 FABRIC = "Spectrum-X"
-NIC_MODEL = "ConnectX-9 (converged dual-port)"   # Assumption: VR 세대
-DPU_MODEL = "BlueField-4"                        # Confirmed 발표 / RA는 유추
-STORAGE_PATHS_PER_TRAY = 2       # Assumption: CX-9 dual-port 스토리지 경로
-MGMT_PATHS_PER_TRAY = 1          # Assumption: BF-4 관리(OOB/in-band) 경로
-PATH_BW_GBPS = 400.0             # Assumption: 800G dual-port 반분
-OVERSUB_RATIO = 1.5              # Assumption: converged rail 오버섭
-LAT_US_BASE = 90.0               # Assumption: RoCE 스토리지 경로 RTT 근방
+NIC_MODEL = "ConnectX-9 (converged dual-port)"   # Assumption: VR generation
+DPU_MODEL = "BlueField-4"                        # Confirmed announcement / RA is inferred
+STORAGE_PATHS_PER_TRAY = 2       # Assumption: CX-9 dual-port storage paths
+MGMT_PATHS_PER_TRAY = 1          # Assumption: BF-4 management (OOB/in-band) path
+PATH_BW_GBPS = 400.0             # Assumption: half of an 800G dual-port
+OVERSUB_RATIO = 1.5              # Assumption: converged rail oversubscription
+LAT_US_BASE = 90.0               # Assumption: near the RoCE storage-path RTT
 INJECT_KINDS = ("path_degrade", "storage_congestion")
 
 _K = 2654435761
@@ -66,14 +68,14 @@ class ConvergedEngine:
         self.last = 0.0
         self.site_names: Dict[str, str] = {}
         self.site_trays: Dict[str, int] = {}
-        self.congested: Dict[str, bool] = {}      # site_id -> 혼잡 주입
-        self.degraded: set = set()                # (tenant, su, site) 저하 경로
+        self.congested: Dict[str, bool] = {}      # site_id -> congestion injection
+        self.degraded: set = set()                # (tenant, su, site) degraded path
         self.events: deque = deque(maxlen=500)
         self.alerts: Dict[tuple, dict] = {}
         self._alert_seq = itertools.count(1)
         self._event_seq = itertools.count(1)
 
-    # ── topology (re)build — STORE reseed 감지 ────────────────────────
+    # ── topology (re)build — detect STORE reseed ────────────────────────
     def _ensure_topology(self) -> bool:
         cur = getattr(STORE, "seed_gen", 0)
         if cur == self.seed_gen:
@@ -126,7 +128,7 @@ class ConvergedEngine:
     def _site_ok(self, sid: str, q: str) -> bool:
         return q.lower() in (sid, self.site_names.get(sid, "").lower())
 
-    # ── 파생 축 (STORE.lock 보유 필요) ────────────────────────────────
+    # ── derived axes (requires holding STORE.lock) ────────────────────────────────
     def tenant_paths_src(self) -> Dict[tuple, set]:
         """(tenant_id, su_id, site_id) -> attached tray_ids."""
         out: Dict[tuple, set] = {}
@@ -143,7 +145,7 @@ class ConvergedEngine:
         return out
 
     def _site_vnis(self, sid: str) -> int:
-        """사이트에 존재하는 테넌트의 VNI 세그먼트 수 (tenant_networks 파생)."""
+        """Number of VNI segments for tenants present at a site (derived from tenant_networks)."""
         t_sites = {}
         for (tid, su, s), _ in self.tenant_paths_src().items():
             t_sites.setdefault(tid, set()).add(s)
@@ -151,7 +153,7 @@ class ConvergedEngine:
                    if n.get("vni") and sid in t_sites.get(
                        n.get("tenant_id"), set()))
 
-    # ── tick — 알람 평가 (TICK_SEC 캐시) ──────────────────────────────
+    # ── tick — alarm evaluation (TICK_SEC cache) ──────────────────────────────
     def tick(self, force: bool = False):
         with STORE.lock:
             if self._ensure_topology():
@@ -223,9 +225,9 @@ class ConvergedEngine:
             deg = (tid, su, sid) in self.degraded
             wave = ((h ^ t * _K) % 400) / 1000.0          # 0.00~0.40
             bw = min(len(trays) * PATH_BW_GBPS * 0.8,
-                     gpus * 12.5 * (0.6 + wave))          # RA baseline 근방
+                     gpus * 12.5 * (0.6 + wave))          # near the RA baseline
             if cong:
-                bw *= 0.55                                 # 혼잡 → 유효 BW 저하
+                bw *= 0.55                                 # congestion → lower effective BW
             if deg:
                 bw *= 0.5
             lat = LAT_US_BASE * (1.0 + wave)
@@ -233,7 +235,7 @@ class ConvergedEngine:
                 lat *= 4.0
             if deg:
                 lat *= 3.0
-            # ECN/PFC — tick 비례 단조 증가, 혼잡/저하 시 급증
+            # ECN/PFC — monotonic increase with tick; spikes under congestion/degradation
             ecn = (h % 9 + 1) * t + (12000 * t if cong else 0) \
                 + (3000 * t if deg else 0)
             pfc = (h % 4) * (t // 3) + (30000 * t if cong else 0) \
@@ -250,7 +252,7 @@ class ConvergedEngine:
         return out
 
     def alerts_for_obs(self) -> List[dict]:
-        """obs alerts() merge용 — domain 'storage' 알람 전체."""
+        """For obs alerts() merge — all 'storage' domain alarms."""
         self.tick()
         return [dict(a) for a in self.alerts.values()]
 

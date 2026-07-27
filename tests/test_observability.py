@@ -1,13 +1,14 @@
-"""통합 Observability 텔레메트리 생성기 (app/observability.py) 테스트.
+"""Tests for the unified observability telemetry generator (app/observability.py).
 
-DCGM/DCIM/DLC/SLA 4개 플레인 + GPU↔DLC 열 결합(장애 주입→온도 상승→throttle
-→alerts/correlate, recover→정상화)을 검증한다."""
+Verifies the 4 planes (DCGM/DCIM/DLC/SLA) + GPU↔DLC thermal coupling (fault
+injection → temperature rise → throttle → alerts/correlate, recover →
+normalization)."""
 from app.observability import ENGINE
 from app.store import STORE, GPU_PER_TRAY
 
 
 def _ticks(n=1):
-    """랜덤워크/장애 다이내믹스를 n tick 강제로 진행 (TICK_SEC 게이트 우회)."""
+    """Force n ticks of random-walk / fault dynamics (bypass the TICK_SEC gate)."""
     for _ in range(n):
         ENGINE.tick(force=True)
 
@@ -59,7 +60,7 @@ def test_dcgm_filters_pagination_and_detail(client):
     assert set(d["history"]) == {"ts", "util", "temp", "power"}
     assert len(d["history"]["ts"]) >= 1
     assert client.get("/emulator/v1/obs/dcgm/gpus/GPU-nope-g0").status_code == 404
-    # tenant filter — 미할당은 idle, 할당 GPU만 매칭
+    # tenant filter — unallocated is idle, only allocated GPUs match
     _attach(client, "su-1-rack-01-tray-00-dpu-0", "tenant-obs")
     _ticks(1)
     t = client.get("/emulator/v1/obs/dcgm/gpus",
@@ -80,7 +81,7 @@ def test_racks_and_cdu_physical_consistency(client):
     cdus = client.get("/emulator/v1/obs/dlc/cdus").json()
     assert {c["cdu_id"] for c in cdus} == {"cdu-su-1", "cdu-su-2"}
     c1 = next(c for c in cdus if c["cdu_id"] == "cdu-su-1")
-    # 물리 정합: rack heat 합 ≈ CDU measured_heat (heat-capture 0.97)
+    # physical consistency: sum of rack heat ≈ CDU measured_heat (heat-capture 0.97)
     rack_heat = sum(r["it_power_kw"] for r in racks) * 0.97
     assert abs(c1["measured_heat_kw"] - rack_heat) < max(5.0, rack_heat * 0.02)
     # delta_t = return - supply
@@ -89,7 +90,7 @@ def test_racks_and_cdu_physical_consistency(client):
     assert c1["oem"] == "Supermicro" and c1["type"] == "in-row-dlc2"
     assert c1["rated_capacity_kw"] == 1600.0
     assert len(c1["pumps"]) == 2
-    # 상세: branch = rack당 1개(CDM), leak 센서 포함
+    # detail: branch = 1 per rack (CDM), includes the leak sensor
     det = client.get("/emulator/v1/obs/dlc/cdus/cdu-su-1").json()
     assert len(det["branches"]) == 16
     assert {b["rack_id"] for b in det["branches"]} == {r["rack_id"] for r in racks}
@@ -114,22 +115,22 @@ def test_flow_loss_couples_gpu_thermals_alerts_correlation(client):
     assert after > before + 8, (before, after)
     assert any("thermal" in g["throttle_reasons"] for g in after_g)
     assert any(g["health"] in ("warning", "critical") for g in after_g)
-    # summary 실시간 집계 반영
+    # summary reflects real-time aggregation
     s = client.get("/emulator/v1/obs/summary").json()
     assert s["gpus"]["throttled"] >= 1
     assert s["cooling"]["alarms_open"] >= 1
-    # 정규화 알림: cooling FLOW_LOW firing + gpu thermal 알림
+    # normalized alerts: cooling FLOW_LOW firing + gpu thermal alert
     alerts = client.get("/emulator/v1/obs/alerts").json()
     assert any(a["domain"] == "cooling" and a["state"] == "firing"
                and a["resource"] == "cdu-su-1" for a in alerts)
     assert any(a["domain"] == "gpu" and a["state"] == "firing" for a in alerts)
-    # RCA 상관 뷰
+    # RCA correlation view
     corr = client.get("/emulator/v1/obs/correlate/cooling").json()
     hit = next(x for x in corr if x["cdu_id"] == "cdu-su-1")
     assert "tenant-hot" in hit["tenant_impact"]
     assert hit["affected_gpus"] >= 1
     assert "su-1" in hit["finding"]
-    # 미영향 CDU(su-2)는 상관 항목 없어야 함
+    # an unaffected CDU (su-2) should have no correlation entry
     assert not any(x["cdu_id"] == "cdu-su-2" for x in corr)
 
 
@@ -143,7 +144,7 @@ def test_recover_normalizes_gradually(client):
     assert any(a["code"] == "PUMP_FAILURE" for a in c["alarms"])
     assert c["health"] == "critical"
     client.post("/emulator/v1/obs/dlc/cdus/cdu-su-2/recover")
-    _ticks(15)                                # flow 복구 + offset 점진 감쇠
+    _ticks(15)                                # flow recovery + gradual offset decay
     c2 = client.get("/emulator/v1/obs/dlc/cdus/cdu-su-2").json()
     assert all(p["state"] != "failed" for p in c2["pumps"])
     assert c2["alarms"] == [] and c2["health"] == "ok"
@@ -166,7 +167,7 @@ def test_leak_closes_branch_and_fires_critical(client):
     alerts = client.get("/emulator/v1/obs/alerts").json()
     assert any(a["domain"] == "cooling" and a["severity"] == "critical"
                and a["state"] == "firing" for a in alerts)
-    # 닫힌 branch의 랙은 critical
+    # a rack on a closed branch is critical
     racks = client.get("/emulator/v1/obs/racks", params={"su": "su-1"}).json()
     leak_rack = next(r for r in racks if r["rack_id"] == closed[0]["rack_id"])
     assert leak_rack["health"] == "critical"
@@ -184,13 +185,13 @@ def test_slo_tenant_calculation(client):
     for k in ("error_budget_remaining_pct", "burn_rate",
               "cooling_caused_unavail_min", "throttling_min"):
         assert k in t, k
-    # availability와 available_gpus 정합
+    # availability is consistent with available_gpus
     assert abs(t["gpu_availability_pct"]
                - 100.0 * t["available_gpus"] / t["contracted_gpus"]) < 0.01
 
 
 def test_alerts_include_provisioning_faults(client):
-    # store 시드 샘플 fault(resolved)가 provisioning 도메인으로 노출
+    # the store's seeded sample fault (resolved) is exposed under the provisioning domain
     alerts = client.get("/emulator/v1/obs/alerts").json()
     assert any(a["domain"] == "provisioning" for a in alerts)
     for a in alerts:

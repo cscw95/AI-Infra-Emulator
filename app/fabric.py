@@ -38,9 +38,9 @@ def _members_for_tenant(tenant_id: str):
 def _derived_partitions():
     """One IB partition per tenant network that carries a VNI.
 
-    converged rail(Ethernet N-S) 네트워크는 IB 파티션을 파생하지 않고,
-    NOCP가 전파한 ib_pkey가 있으면 그 값을 정본으로 사용한다 — UFM P_Key는
-    테넌트당 1개(컨트롤플레인과 값까지 싱크)."""
+    A converged rail (Ethernet N-S) network does not derive an IB partition;
+    if NOCP has propagated an ib_pkey, that value is used as canonical — the
+    UFM P_Key is one per tenant (value-synced with the control plane)."""
     parts = []
     nets = sorted((n for n in STORE.tenant_networks.values()
                    if n.get("vni") and n.get("fabric", "compute") != "converged"),

@@ -43,11 +43,12 @@ class TenantNetwork(BaseModel):
     vrf: Optional[str] = None
     subnet: Optional[str] = None
     encryption_required: bool = False
-    # 컨트롤플레인(NOCP) 정합 — UFM P_Key는 테넌트당 1개가 정본이며 값은
-    # NOCP가 부여한다(전파 시 IB 파티션이 이 값을 그대로 사용). converged
-    # rail(Ethernet N-S)은 IB 파티션 파생 대상이 아니므로 fabric으로 구분.
+    # control-plane (NOCP) alignment — the UFM P_Key is canonical, one per
+    # tenant, and its value is assigned by NOCP (propagation makes the IB
+    # partition use this value as-is). The converged rail (Ethernet N-S) is not
+    # a target for IB partition derivation, so it is distinguished via fabric.
     ib_pkey: Optional[int] = None
-    fabric: str = "compute"          # compute(IB 파생) | converged(Eth 전용)
+    fabric: str = "compute"          # compute (IB-derived) | converged (Eth only)
 
 
 class SecuritySpec(BaseModel):

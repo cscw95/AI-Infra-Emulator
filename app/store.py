@@ -122,8 +122,8 @@ class ComputeTray:
     lifecycle_state: str = "Ready"       # Discovered|Provisioning|Ready|Degraded
     health: str = "ok"
     dpu_id: str = ""
-    serial: str = ""                     # HW 시리얼 — HW 교체(trayops) 시 갱신
-    mac_address: str = ""                # host NIC MAC — HW 교체 시 갱신
+    serial: str = ""                     # HW serial — refreshed on HW replacement (trayops)
+    mac_address: str = ""                # host NIC MAC — refreshed on HW replacement
 
 
 @dataclass
@@ -158,7 +158,7 @@ class Store:
         self.policy_txns: Dict[str, dict] = {}
         self.dhcp_leases: Dict[str, dict] = {}
         self.events = deque(maxlen=1000)
-        # 프로비저닝 계열 장애 이력 — 재프로비저닝(=장애) 에피소드 등
+        # provisioning-class fault history — reprovisioning (=fault) episodes, etc.
         # [{tray_id, kind, detail, at, resolved, resolved_at}]
         self.faults = deque(maxlen=200)
         self._ids = itertools.count(1)
@@ -221,7 +221,7 @@ class Store:
             self._seed_sample_faults()
 
     def _seed_sample_faults(self):
-        """리셋/시드 직후 장애 이력 메뉴가 비지 않도록 샘플 1건 시드."""
+        """Seed one sample so the fault-history view is not empty right after reset/seed."""
         self.faults.clear()
         first = next(iter(self.trays), None)
         if first:

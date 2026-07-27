@@ -1,4 +1,4 @@
-"""Rack control plane — 전체 랙 제어 API·텔레메트리 반영 검증."""
+"""Rack control plane — verifies the full rack-control API and its telemetry effects."""
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -18,14 +18,14 @@ def _first_rack_id():
 
 
 def test_power_off_nulls_dcgm_and_marks_rack_oob():
-    """rack off = in-band(DCGM) 텔레메트리 유실 — 판독값 null·state off,
-    랙 뷰는 OOB(BMC/DCIM) 소스로만 유지(대기전력·inlet)."""
+    """rack off = in-band (DCGM) telemetry lost — readings null / state off;
+    the rack view is kept only from OOB (BMC/DCIM) sources (standby power, inlet)."""
     rid = _first_rack_id()
     r = client.post(f"{OBS}/racks/{rid}/control", json={"action": "power_off"})
     assert r.status_code == 200 and r.json()["state"]["power_state"] == "off"
     view = _rack(rid)
     assert view["power_state"] == "off"
-    assert view["it_power_kw"] < 1.0            # 대기전력 — OOB로 유지
+    assert view["it_power_kw"] < 1.0            # standby power — kept via OOB
     assert view["telemetry_source"] == "oob"
     gpus = client.get(f"{OBS}/dcgm/gpus", params={"rack": rid, "limit": 5}).json()
     assert gpus["gpus"], "rack filter returned no GPUs"
@@ -37,7 +37,7 @@ def test_power_off_nulls_dcgm_and_marks_rack_oob():
                   "nvlink_rx_gbps"):
             assert g[k] is None, k
         assert g["throttle_reasons"] == []
-    # state=off 필터 동작 + summary off 카운트
+    # state=off filter works + summary off count
     off = client.get(f"{OBS}/dcgm/gpus",
                      params={"rack": rid, "state": "off", "limit": 5}).json()
     assert off["total"] == 72
@@ -46,7 +46,7 @@ def test_power_off_nulls_dcgm_and_marks_rack_oob():
     su = next(x for x in client.get(f"{OBS}/dcgm/su-summary").json()["sus"]
               if x["su_id"] == view["su_id"])
     assert su["off"] >= 72
-    # 원복 → 정상 판독 복원
+    # restore → normal readings recovered
     client.post(f"{OBS}/racks/{rid}/control", json={"action": "power_on"})
     assert _rack(rid)["power_state"] == "on"
     assert _rack(rid)["telemetry_source"] == "inband"
@@ -67,7 +67,7 @@ def test_bulk_power_cap_sets_throttle_reason():
     assert all(v["power_cap_kw"] for v in views)
     summary = client.get(f"{OBS}/summary").json()
     assert summary["racks_capped"] == len(STORE.racks)
-    # 활성(테넌트) GPU가 있으면 power_cap 스로틀 사유 노출
+    # if there are active (tenant) GPUs, the power_cap throttle reason is exposed
     gpus = client.get(f"{OBS}/dcgm/gpus",
                       params={"state": "active", "limit": 50}).json()["gpus"]
     if gpus:
@@ -93,7 +93,7 @@ def test_restart_converges_back_to_on():
     rid = _first_rack_id()
     client.post(f"{OBS}/racks/{rid}/control", json={"action": "restart"})
     assert _rack(rid)["power_state"] == "mixed"
-    # 강제 tick 2회(제어 엔드포인트가 force tick) → 부트 완료
+    # 2 forced ticks (the control endpoint force-ticks) → boot complete
     client.post(f"{OBS}/racks/{rid}/control", json={"action": "workload",
                 "params": {"profile": "steady"}})
     client.post(f"{OBS}/racks/{rid}/control", json={"action": "workload",
@@ -113,7 +113,7 @@ def test_invalid_action_and_scope_rejected():
 
 
 def test_workload_profile_drives_idle_racks():
-    # 미할당 랙에도 데모 부하 적용 가능
+    # demo load can be applied even to an unallocated rack
     rid = _first_rack_id()
     client.post(f"{OBS}/racks/{rid}/control",
                 json={"action": "workload", "params": {"profile": "train"}})

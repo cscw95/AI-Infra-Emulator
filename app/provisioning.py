@@ -110,12 +110,13 @@ def provision(tray_id: str, planned: bool = False):
     """Start provisioning a compute tray: allocate a DHCP lease and enter the
     PXE boot state machine.
 
-    planned=True (신규 개통 워크플로우)는 재프로비저닝을 장애로 취급하지
-    않는다 — 오케스트레이션(NICo)이 의도한 프로비저닝이기 때문.
+    planned=True (a new bring-up workflow) does not treat reprovisioning as a
+    fault — it is provisioning intended by the orchestration (NICo).
 
-    이미 HostReady까지 도달했던 트레이(Ready/InService)의 재프로비저닝은
-    계획되지 않은 장애로 취급한다: health=warning, critical 이벤트 발행,
-    STORE.faults 에 unresolved 에피소드 기록 (HostReady 재도달 시 resolved)."""
+    Reprovisioning a tray that had already reached HostReady (Ready/InService)
+    is treated as an unplanned fault: health=warning, a critical event is
+    emitted, and an unresolved episode is recorded in STORE.faults (resolved
+    when HostReady is reached again)."""
     with STORE.lock:
         tray = _tray(tray_id)
         prev_lc, prev_stage = tray.lifecycle_state, tray.boot_stage
@@ -169,7 +170,7 @@ def provision_step(tray_id: str):
         if complete:
             tray.lifecycle_state = "Ready"
             tray.boot_stage = READY_STAGE
-            # 재프로비저닝 장애 회복: health 복원 + 에피소드 resolved 마감
+            # reprovision fault recovery: restore health + close the episode as resolved
             if tray.health == "warning":
                 tray.health = "ok"
             for f in reversed(STORE.faults):
@@ -294,21 +295,23 @@ def ipxe_script(tray_id: str):
     )
 
 
-# ── Faults (전 도메인 장애 피드 — NOCP /emu/faults가 merge) ───────────
+# ── Faults (all-domain fault feed — merged by NOCP /emu/faults) ───────────
 @router.get("/faults")
 def faults(limit: int = 30):
-    """트윈 전 도메인 장애 이력 — NOCP·포털 상단 알림의 원천 피드.
+    """All-domain fault history for the twin — the source feed for the
+    top-of-page alerts in NOCP and the portal.
 
-    재프로비저닝 에피소드 + 통합 obs 알림(랙 제어/냉각/패브릭/스토리지)을
-    동일 shape로 합친다: [{tray_id, kind, detail, at, resolved, ...}]."""
+    Combines reprovisioning episodes + unified obs alerts (rack control /
+    cooling / fabric / storage) into the same shape:
+    [{tray_id, kind, detail, at, resolved, ...}]."""
     with STORE.lock:
         items = list(STORE.faults)
-        try:                          # obs 알림 merge (지연 import — 순환 방지)
+        try:                          # merge obs alerts (lazy import — avoid a cycle)
             from .observability import ENGINE as _OBS
             _OBS.tick()
             for a in _OBS.alert_list():
                 if a.get("domain") == "provisioning":
-                    continue          # STORE.faults가 원본 — 중복 방지
+                    continue          # STORE.faults is the source — avoid duplicates
                 items.append({
                     "tray_id": a.get("resource", "-"),
                     "kind": a.get("domain", "obs"),

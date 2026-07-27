@@ -1,27 +1,30 @@
-"""VAST Data VMS 에뮬레이터 — 사이트별 AI Storage(VAST 클러스터 1식)를
-VMS(VAST Management System) 개념 모델 수준으로 에뮬레이션한다 (prefix /vast/v1).
+"""VAST Data VMS emulator — emulates each site's AI Storage (one VAST cluster)
+at the VMS (VAST Management System) conceptual-model level (prefix /vast/v1).
 
-리소스 축은 VAST VMS REST API의 공개 컬렉션(views / quotas / clusters /
-monitors)을 따르되, 경로는 에뮬레이터 로컬 규약(/vast/v1)을 쓴다.
+The resource axes follow VAST VMS REST API's public collections (views /
+quotas / clusters / monitors), but paths use the emulator-local convention
+(/vast/v1).
 
-Confirmed (공개 규격):
-  - VMS REST 컬렉션 존재: views/clusters/monitors/quotas/viewpolicies
+Confirmed (public spec):
+  - VMS REST collections exist: views/clusters/monitors/quotas/viewpolicies
     (vast-data/vastpy SDK, VAST KB "The VAST REST API")
-  - DASE(Disaggregated Shared-Everything): stateless CNode(CBox)와
-    NVMe-oF JBOF DBox(SCM+QLC) 분리 (vastdata.com "How it works")
-  - Similarity-based data reduction — 고객 대다수 ~3:1 이상 DRR 주장
-    (VAST 블로그 "Similarity Reduction: Report from the Field")
-  - VAST Cluster 버전 네이밍 5.x (VAST Cluster 5.3 Release Notes)
-  - GPU당 스토리지 대역 baseline ~12.5Gb/s, 체크포인트는 write burst 성격
-    (NVIDIA DGX SuperPOD storage RA)
-Assumption (비공개·미확정 — 임의 정합값):
-  - VMS API 버전 경로/알람 스키마(클러스터 내장 Swagger에만 존재) — 단순화
-  - 사이트별 클러스터 규모: CBox 8 · DBox 10, raw 20PB / usable 14PB
-  - CBox당 프런트엔드 대역 400Gb/s, 뷰 쿼터 GPU당 10TB, QoS GPU당 25Gb/s
-  - 체크포인트 write burst 주기(12 tick 중 3 tick), p99 지연 기준치
-동작: ufm/netq와 동일한 tick 캐시 패턴(TICK_SEC) — 카운터·부하는 tick_no
-기반 결정적 파형으로 폴링마다 동적. 부하는 테넌트 활성 GPU 수(STORE
-attachment 파생)에 비례. STORE.seed_gen 변경(리셋) 시 재구축 + 샘플 시드."""
+  - DASE (Disaggregated Shared-Everything): stateless CNode (CBox) separated
+    from NVMe-oF JBOF DBox (SCM+QLC) (vastdata.com "How it works")
+  - Similarity-based data reduction — most customers claim DRR ~3:1 or better
+    (VAST blog "Similarity Reduction: Report from the Field")
+  - VAST Cluster version naming 5.x (VAST Cluster 5.3 Release Notes)
+  - Per-GPU storage bandwidth baseline ~12.5Gb/s; checkpoints are write-burst
+    in nature (NVIDIA DGX SuperPOD storage RA)
+Assumption (non-public / undetermined — arbitrary consistent values):
+  - VMS API version paths / alarm schema (only in the cluster's built-in
+    Swagger) — simplified
+  - Per-site cluster size: 8 CBox · 10 DBox, raw 20PB / usable 14PB
+  - 400Gb/s front-end bandwidth per CBox, view quota 10TB/GPU, QoS 25Gb/s/GPU
+  - Checkpoint write-burst period (3 of every 12 ticks), p99 latency thresholds
+Behavior: same tick-cache pattern as ufm/netq (TICK_SEC) — counters/load form a
+deterministic waveform based on tick_no, dynamic per poll. Load is proportional
+to the number of a tenant's active GPUs (derived from STORE attachments).
+Rebuilt + sample seeded on STORE.seed_gen change (reset)."""
 import itertools
 import time
 import zlib
@@ -36,26 +39,26 @@ from .store import STORE, CLUSTER, GPU_PER_TRAY, _iso
 router = APIRouter(prefix="/vast/v1", tags=["vast"])
 
 TICK_SEC = 2.5
-CBOXES = 8                        # Assumption: 사이트별 컴퓨트 인클로저 수
-DBOXES = 10                       # Assumption: 사이트별 용량 인클로저 수
+CBOXES = 8                        # Assumption: compute enclosures per site
+DBOXES = 10                       # Assumption: capacity enclosures per site
 RAW_PB = 20.0                     # Assumption
-USABLE_PB = 14.0                  # Assumption (erasure coding 후)
+USABLE_PB = 14.0                  # Assumption (after erasure coding)
 VERSION = "5.3.0"                 # Confirmed naming: VAST Cluster 5.3
-CBOX_BW_GBPS = 400.0              # Assumption: CBox당 프런트엔드 대역
-QUOTA_TB_PER_GPU = 10.0           # Assumption: dataset+ckpt 쿼터
-QOS_BW_GBPS_PER_GPU = 25.0        # Assumption: baseline 12.5Gb/s x2 헤드룸
+CBOX_BW_GBPS = 400.0              # Assumption: front-end bandwidth per CBox
+QUOTA_TB_PER_GPU = 10.0           # Assumption: dataset+ckpt quota
+QOS_BW_GBPS_PER_GPU = 25.0        # Assumption: baseline 12.5Gb/s x2 headroom
 QOS_IOPS_K_PER_GPU = 8.0          # Assumption
-READ_GBPS_PER_GPU = 12.5          # Confirmed 계열: NVIDIA RA baseline
-WRITE_GBPS_PER_GPU = 2.0          # Assumption: 평시 로그/셔플 쓰기
-CKPT_WRITE_GBPS_PER_GPU = 18.0    # Assumption: 체크포인트 덤프 버스트
-CKPT_PERIOD = 12                  # Assumption: 버스트 주기 (tick)
-CKPT_TICKS = 3                    # Assumption: 버스트 지속 (tick)
-LAT_P99_BASE_MS = 0.8             # Assumption: NVMe-oF/RDMA p99 근방
-CAP_PRESSURE_PCT = 93.0           # capacity_pressure 주입 시 사용률
+READ_GBPS_PER_GPU = 12.5          # Confirmed family: NVIDIA RA baseline
+WRITE_GBPS_PER_GPU = 2.0          # Assumption: normal log/shuffle writes
+CKPT_WRITE_GBPS_PER_GPU = 18.0    # Assumption: checkpoint dump burst
+CKPT_PERIOD = 12                  # Assumption: burst period (ticks)
+CKPT_TICKS = 3                    # Assumption: burst duration (ticks)
+LAT_P99_BASE_MS = 0.8             # Assumption: near NVMe-oF/RDMA p99
+CAP_PRESSURE_PCT = 93.0           # utilization when capacity_pressure is injected
 INJECT_KINDS = ("nvme_drive_fail", "cbox_down", "latency_spike",
                 "capacity_pressure")
 
-_K = 2654435761                   # Knuth 곱셈 해시 (ufm/netq와 동일 패턴)
+_K = 2654435761                   # Knuth multiplicative hash (same pattern as ufm/netq)
 
 
 def _crc(s: str) -> int:
@@ -84,7 +87,7 @@ class VastEngine:
         self._alert_seq = itertools.count(1)
         self._event_seq = itertools.count(1)
 
-    # ── topology (re)build — STORE reseed 감지 ────────────────────────
+    # ── topology (re)build — detect STORE reseed ────────────────────────
     def _ensure_topology(self) -> bool:
         cur = getattr(STORE, "seed_gen", 0)
         if cur == self.seed_gen:
@@ -108,7 +111,7 @@ class VastEngine:
                 "name": name, "site": sid, "site_name": self.site_names[sid],
                 "cboxes": CBOXES, "dboxes": DBOXES,
                 "raw_pb": RAW_PB, "usable_pb": USABLE_PB,
-                # Assumption: 기저 사용량(플랫폼/타 워크로드) 7~8PB 근방
+                # Assumption: baseline usage (platform/other workloads) ~7-8PB
                 "base_used_pb": 7.0 + (h // 7 % 10) / 10.0,
                 "drr": round(2.8 + (_crc(name + "/drr") % 50) / 100.0, 2),  # ~3:1
                 "version": VERSION,
@@ -119,7 +122,7 @@ class VastEngine:
         return True
 
     def _seed_sample(self):
-        """리셋 직후 이벤트/알람 이력이 비지 않도록 resolved 샘플 1건 시드."""
+        """Seed one resolved sample so event/alarm history is not empty right after reset."""
         c = next(iter(self.clusters.values()), None)
         if not c:
             return
@@ -134,7 +137,7 @@ class VastEngine:
                        "completed (sample)",
             "at": _iso(), "state": "resolved", "source": "vast"}
 
-    # ── alert/event helpers (UfmEngine 패턴) ──────────────────────────
+    # ── alert/event helpers (UfmEngine pattern) ──────────────────────────
     def _fire(self, key, severity, resource, summary):
         a = self.alerts.get(key)
         if a and a["state"] == "firing":
@@ -160,9 +163,9 @@ class VastEngine:
         return q.lower() in (sid, self.site_names.get(sid, "").lower(),
                              f"vast-{sid}")
 
-    # ── tenant/뷰 파생 (STORE attachment 기반) ────────────────────────
+    # ── tenant/view derivation (from STORE attachments) ────────────────────────
     def tenant_site_trays(self) -> Dict[tuple, set]:
-        """(tenant_id, site_id) -> attached tray_ids (STORE.lock 보유 필요)."""
+        """(tenant_id, site_id) -> attached tray_ids (requires holding STORE.lock)."""
         out: Dict[tuple, set] = {}
         for a in STORE.attachments.values():
             tid = a.get("tenant_id")
@@ -184,7 +187,7 @@ class VastEngine:
             gpus = len(trays) * GPU_PER_TRAY
             quota = max(50.0, gpus * QUOTA_TB_PER_GPU)
             h = _crc(f"{tid}/{sid}")
-            # 사용량: 시작 30% 근방에서 tick에 따라 완만 증가 (Assumption)
+            # usage: gentle increase with tick from ~30% at start (Assumption)
             used = quota * min(0.88, 0.30 + (h % 15) / 100.0 + 0.002 * t)
             rows.append({
                 "path": f"/{tid}/dataset", "tenant_id": tid,
@@ -200,14 +203,14 @@ class VastEngine:
             })
         return rows
 
-    # ── 성능 모델 — 테넌트 활성 GPU 비례 + 체크포인트 버스트 ──────────
+    # ── performance model — proportional to tenant active GPUs + checkpoint burst ──────────
     def _view_perf(self, row: dict) -> dict:
         t = self.tick_no
         h = _crc(row["path"] + row["cluster"])
         gpus = row["gpus"]
-        # 위상은 뷰별로 어긋나게(h) — 폴링마다 파형이 움직인다
+        # phase is offset per view (h) — the waveform moves per poll
         wave = ((h ^ t * _K) % 400) / 1000.0          # 0.00~0.40
-        burst = ((t + h) % CKPT_PERIOD) < CKPT_TICKS  # 체크포인트 write burst
+        burst = ((t + h) % CKPT_PERIOD) < CKPT_TICKS  # checkpoint write burst
         read = gpus * READ_GBPS_PER_GPU * (0.55 + wave) * (0.35 if burst else 1.0)
         write = gpus * (CKPT_WRITE_GBPS_PER_GPU if burst
                         else WRITE_GBPS_PER_GPU) * (0.8 + wave)
@@ -227,7 +230,7 @@ class VastEngine:
             scale = cbox_active / CBOXES
             max_bw = cbox_active * CBOX_BW_GBPS
             vrows = [v for v in views if v["cluster"] == c["name"]]
-            # 백그라운드(플랫폼) 소량 + 테넌트 뷰 롤업
+            # small background (platform) + tenant view roll-up
             read = 6.0 + ((h ^ t * _K) % 60) / 10.0
             write = 2.0 + ((h ^ (t + 3) * _K) % 40) / 10.0
             riops, wiops, clients = 4.0, 1.5, 2
@@ -238,16 +241,16 @@ class VastEngine:
                 riops += p["riops"]; wiops += p["wiops"]
                 clients += v["clients"]
                 vperfs.append((v, p))
-            # cbox_down → 프런트엔드 대역 저하
+            # cbox_down → lower front-end bandwidth
             read = min(read * scale, max_bw * 0.7)
             write = min(write * scale, max_bw * 0.5)
             load = (read + write) / max(1.0, max_bw)
             lat = LAT_P99_BASE_MS * (1.0 + 2.5 * load) \
                 + ((h ^ t * _K) % 30) / 100.0
             if c["fault"] == "latency_spike":
-                lat = 25.0 + ((h ^ t * _K) % 200) / 10.0     # p99 급등
+                lat = 25.0 + ((h ^ t * _K) % 200) / 10.0     # p99 spike
             elif c["fault"] == "nvme_drive_fail":
-                lat *= 1.3                                    # rebuild 영향
+                lat *= 1.3                                    # rebuild impact
             cache = 96.0 - 10.0 * load - ((h ^ t * _K) % 30) / 10.0
             if c["fault"] == "latency_spike":
                 cache -= 20.0
@@ -261,7 +264,7 @@ class VastEngine:
                 "active_clients": clients,
                 "ckpt_burst": any(p["burst"] for _, p in vperfs),
             })
-            for v, p in vperfs:                     # 뷰 단위 롤업
+            for v, p in vperfs:                     # per-view roll-up
                 out.append({
                     "name": v["path"], "scope": "view", "site": c["site"],
                     "tenant_id": v["tenant_id"],
@@ -277,12 +280,12 @@ class VastEngine:
                 })
         return out
 
-    # ── 용량/상태 뷰 ──────────────────────────────────────────────────
+    # ── capacity/status views ──────────────────────────────────────────────────
     def used_pb(self, c: dict, views: List[dict]) -> float:
         if c["fault"] == "capacity_pressure":
             return c["usable_pb"] * CAP_PRESSURE_PCT / 100.0
-        # 테넌트 뷰의 논리 used를 DRR로 나눠 물리 사용량(PB) 산출 후,
-        # 정상 상태는 usable의 82%를 넘지 않게 클램프(오탐 방지).
+        # divide the tenant view's logical used by DRR to get physical usage (PB),
+        # then clamp so normal state does not exceed 82% of usable (avoid false positives).
         vt = sum(v["used_tb"] for v in views if v["cluster"] == c["name"])
         physical = c["base_used_pb"] + (vt / 1000.0) / max(1.0, c["drr"])
         return min(physical, c["usable_pb"] * 0.82)
@@ -305,7 +308,7 @@ class VastEngine:
             "fault": c["fault"],
         }
 
-    # ── tick — 알람 평가 (TICK_SEC 캐시) ──────────────────────────────
+    # ── tick — alarm evaluation (TICK_SEC cache) ──────────────────────────────
     def tick(self, force: bool = False):
         with STORE.lock:
             if self._ensure_topology():
@@ -349,14 +352,14 @@ class VastEngine:
         else:
             self._resolve(("capacity", name))
 
-    # ── obs 연동 공개 함수 ────────────────────────────────────────────
+    # ── obs integration public helpers ────────────────────────────────────────────
     def alerts_for_obs(self) -> List[dict]:
-        """obs alerts() merge용 — domain 'storage' 알람 전체."""
+        """For obs alerts() merge — all 'storage' domain alarms."""
         self.tick()
         return [dict(a) for a in self.alerts.values()]
 
     def summary_for_obs(self) -> dict:
-        """obs /summary의 storage 블록."""
+        """The storage block of obs /summary."""
         self.tick()
         with STORE.lock:
             views = self.view_rows()
@@ -400,7 +403,7 @@ def clusters():
                              for c in ENGINE.clusters.values()]}
 
 
-# ── 2) views (테넌트 파생) ────────────────────────────────────────────
+# ── 2) views (tenant-derived) ────────────────────────────────────────────
 @router.get("/views")
 def views(tenant: Optional[str] = None):
     ENGINE.tick()
@@ -409,7 +412,7 @@ def views(tenant: Optional[str] = None):
         return {"count": len(rows), "views": rows}
 
 
-# ── 3) performance — 클러스터·뷰 롤업 (폴링마다 동적) ─────────────────
+# ── 3) performance — cluster/view roll-up (dynamic per poll) ─────────────────
 @router.get("/performance")
 def performance(site: Optional[str] = None):
     ENGINE.tick()

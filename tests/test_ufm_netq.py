@@ -1,4 +1,4 @@
-"""UFM Enterprise·NetQ 에뮬레이터 — 개별 스위치·링크·장애 결합 검증."""
+"""UFM Enterprise / NetQ emulator — verifies individual switches/links and fault coupling."""
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -16,7 +16,7 @@ def test_ufm_systems_shape_and_scale():
         assert k in s
     assert any(x["type"] == "spine" for x in sw)
     assert any(x["type"] == "leaf" for x in sw)
-    # leaf는 SU마다 plane당 4대
+    # 4 leaves per plane per SU
     n_su = len({r.su_id for r in STORE.racks.values()})
     leafs = [x for x in sw if x["type"] == "leaf"]
     assert len(leafs) == n_su * 4 * 2
@@ -28,7 +28,7 @@ def test_ufm_ports_counters_increase():
     assert p1 and "counters" in p1[0]
     import time
     time.sleep(0.05)
-    # 카운터는 단조 증가(같은 tick이면 동일 허용)
+    # counters increase monotonically (equal is allowed within the same tick)
     p2 = client.get(f"/ufm/v1/resources/ports?system_guid={sw['guid']}").json()["ports"]
     c1 = p1[0]["counters"]["xmit_wait"]
     c2 = p2[0]["counters"]["xmit_wait"]

@@ -1,8 +1,9 @@
-"""컴퓨트 트레이 재기동·HW 교체 수명주기 + KPI (app/trayops.py) 테스트.
+"""Tests for the compute-tray reboot / HW-replace lifecycle + KPI (app/trayops.py).
 
-tick 상태머신 수렴, tenant attachment rejoin, replace 신규 시리얼/MAC/IP,
-KPI 집계, 테넌트 없는 트레이 rejoin skip, obs 알림 fire→resolve(/faults 전파),
-그리고 장비별 fault target 해석(UFM guid/name, VAST 클러스터 name)을 검증한다."""
+Verifies tick state-machine convergence, tenant attachment rejoin, replace with
+a new serial/MAC/IP, KPI aggregation, rejoin skip for trays with no tenant, obs
+alert fire→resolve (propagated to /faults), and per-device fault-target
+resolution (UFM guid/name, VAST cluster name)."""
 from app.store import STORE
 from app.trayops import ENGINE as TOPS
 
@@ -11,7 +12,7 @@ DPU = f"{TRAY}-dpu-0"
 
 
 def _run(n=12):
-    """tick당 1단계 진행 — TICK_SEC 게이트를 우회해 n단계 강제 진행."""
+    """Advance one stage per tick — bypass the TICK_SEC gate to force n stages."""
     for _ in range(n):
         TOPS.tick(force=True)
 
@@ -33,20 +34,20 @@ def test_reboot_walks_all_stages_to_in_service(client):
     assert [s["name"] for s in body["stages"]] == [
         "power_cycle", "post", "nico_discovery", "dhcp_ip", "boot",
         "attestation", "tenant_rejoin", "in_service"]
-    # 중복 시작은 409
+    # a duplicate start returns 409
     assert client.post(f"/emulator/v1/trayops/{TRAY}/reboot").status_code == 409
     _run(10)
     d = client.get("/emulator/v1/obs/tray-ops").json()
     assert not any(o["tray_id"] == TRAY for o in d["inflight"])
     h = next(x for x in d["history"] if x["tray_id"] == TRAY)
     assert h["succeeded"] is True and h["total_s"] >= 0
-    # 단계별 실측 duration 기록
+    # per-stage measured duration is recorded
     for k in ("power_cycle", "post", "nico_discovery", "dhcp_ip", "boot",
               "attestation"):
         assert k in h["stage_durations"], k
     tray = STORE.trays[TRAY]
     assert tray.boot_stage == "HostReady"
-    assert tray.lifecycle_state == "Ready"       # 테넌트 없음
+    assert tray.lifecycle_state == "Ready"       # no tenant
     assert tray.health == "ok"
 
 
@@ -55,7 +56,7 @@ def test_reboot_rejoins_tenant_attachment(client):
     assert any(a["tenant_id"] == "tenant-ops" and a["dpu_id"] == DPU
                for a in STORE.attachments.values())
     client.post(f"/emulator/v1/trayops/{TRAY}/reboot")
-    # 진행 중에는 attachment 해제 상태 (원 테넌트는 op가 기억)
+    # while in progress the attachment is detached (the op remembers the original tenant)
     assert not any(a["dpu_id"] == DPU for a in STORE.attachments.values())
     _run(10)
     att = [a for a in STORE.attachments.values() if a["dpu_id"] == DPU]
@@ -70,7 +71,7 @@ def test_reboot_rejoins_tenant_attachment(client):
 
 
 def test_replace_new_serial_mac_and_ip(client):
-    # 기존 lease 확보 (PXE 부트 워크)
+    # capture the existing lease (PXE boot walk)
     client.post(f"/emulator/v1/provision/{TRAY}")
     for _ in range(4):
         client.post(f"/emulator/v1/provision/{TRAY}/step")
@@ -85,9 +86,9 @@ def test_replace_new_serial_mac_and_ip(client):
     _run(12)
     lease = client.get("/emulator/v1/dhcp/leases",
                        params={"tray_id": TRAY}).json()[0]
-    assert lease["ip_address"] != old["ip_address"]      # 신규 MAC → 신규 IP
+    assert lease["ip_address"] != old["ip_address"]      # new MAC → new IP
     assert lease["mac_address"] != old["mac_address"]
-    assert STORE.trays[TRAY].serial != old_serial        # 신규 시리얼 등록
+    assert STORE.trays[TRAY].serial != old_serial        # register the new serial
     assert STORE.trays[TRAY].mac_address == lease["mac_address"]
     h = next(x for x in client.get("/emulator/v1/obs/tray-ops").json()["history"]
              if x["tray_id"] == TRAY)
@@ -96,7 +97,7 @@ def test_replace_new_serial_mac_and_ip(client):
 
 def test_kpi_aggregation(client):
     d0 = client.get("/emulator/v1/obs/tray-ops").json()
-    assert d0["kpi"]["ops_24h"] >= 2             # 리셋 시 데모 샘플 2건 시드
+    assert d0["kpi"]["ops_24h"] >= 2             # 2 demo samples seeded on reset
     assert any(h.get("note") == "(sample)" for h in d0["history"])
     client.post(f"/emulator/v1/trayops/{TRAY}/reboot")
     _run(10)
@@ -104,7 +105,7 @@ def test_kpi_aggregation(client):
     _run(12)
     k = client.get("/emulator/v1/obs/tray-ops").json()["kpi"]
     assert k["ops_24h"] >= 4
-    assert k["reboots"] >= 2 and k["replacements"] >= 2   # 샘플 1+1 포함
+    assert k["reboots"] >= 2 and k["replacements"] >= 2   # includes the 1+1 samples
     for key in ("avg_discovery_s", "avg_ip_s", "avg_os_install_s",
                 "avg_rejoin_s", "avg_total_s", "rejoin_success_pct"):
         assert key in k, key
@@ -118,7 +119,7 @@ def test_reboot_without_tenant_skips_rejoin(client):
     h = next(x for x in client.get("/emulator/v1/obs/tray-ops").json()["history"]
              if x["tray_id"] == TRAY)
     assert h["tenant_id"] is None
-    assert "tenant_rejoin" in h["skipped"]               # skip 표기
+    assert "tenant_rejoin" in h["skipped"]               # marked skip
     assert "tenant_rejoin" not in h["stage_durations"]
 
 
@@ -129,12 +130,12 @@ def test_trayop_alert_fires_resolves_and_feeds_faults(client):
     a = next(x for x in alerts
              if x["domain"] == "trayops" and x["resource"] == TRAY)
     assert a["state"] == "firing" and "TRAY_REBOOTING" in a["summary"]
-    assert "tenant-ops" in a["summary"]                  # tenant 영향 표기
+    assert "tenant-ops" in a["summary"]                  # indicates tenant impact
     f = client.get("/emulator/v1/faults").json()
     rec = next(x for x in f["recent"]
                if x["tray_id"] == TRAY and x["kind"] == "trayops")
     assert rec["resolved"] is False
-    _run(10)                                             # in_service 도달
+    _run(10)                                             # reach in_service
     alerts = client.get("/emulator/v1/obs/alerts").json()
     a = next(x for x in alerts
              if x["domain"] == "trayops" and x["resource"] == TRAY)
@@ -152,7 +153,7 @@ def test_trayop_marks_gpus_idle_and_tenant_unavail(client):
     OBS.tick(force=True)
     gpus = client.get("/emulator/v1/obs/dcgm/gpus",
                       params={"tenant": "tenant-ops"}).json()
-    assert gpus["total"] == 4                    # 원 테넌트로 계속 집계
+    assert gpus["total"] == 4                    # still counted against the original tenant
     assert all(g["state"] == "idle" for g in gpus["gpus"])
     slo = client.get("/emulator/v1/obs/slo").json()
     t = next(x for x in slo["tenants"] if x["tenant_id"] == "tenant-ops")
@@ -161,10 +162,10 @@ def test_trayop_marks_gpus_idle_and_tenant_unavail(client):
     OBS.tick(force=True)
     slo2 = client.get("/emulator/v1/obs/slo").json()
     t2 = next(x for x in slo2["tenants"] if x["tenant_id"] == "tenant-ops")
-    assert t2["available_gpus"] == 4             # 복귀 후 정상
+    assert t2["available_gpus"] == 4             # normal after return
 
 
-# ── 장비별 개별 제어(기능 1) — fault target 해석 검증 ──────────────────
+# ── per-device individual control (feature 1) — fault-target resolution ──────────────────
 def test_ufm_switch_targeting_by_guid_and_name(client):
     systems = client.get("/ufm/v1/resources/systems").json()["systems"]
     leaf = next(s for s in systems if s["type"] == "leaf")
@@ -179,7 +180,7 @@ def test_ufm_switch_targeting_by_guid_and_name(client):
     sw2 = next(s for s in client.get("/ufm/v1/resources/systems")
                .json()["systems"] if s["guid"] == leaf["guid"])
     assert sw2["state"] == "ok"
-    # name target → 해당 스위치 연관 링크에 link_degrade
+    # name target → link_degrade on the links associated with that switch
     r3 = client.post("/ufm/v1/faults/inject",
                      json={"kind": "link_degrade", "target": leaf["name"]})
     assert r3.status_code == 200 and leaf["name"] in r3.json()["target"]

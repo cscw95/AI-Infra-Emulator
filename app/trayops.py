@@ -1,20 +1,22 @@
-"""컴퓨트 트레이 재기동(reboot)·HW 교체(replace) 수명주기 + KPI 에뮬레이터
+"""Compute-tray reboot / HW-replace lifecycle + KPI emulator
 (prefix /emulator/v1 — trayops/{tray_id}/reboot|replace, obs/tray-ops).
 
-tick 기반 상태머신 (다른 엔진과 동일한 TICK_SEC 캐시 패턴): TICK 2.5s당
-1단계 진행하고 단계별 실측 duration을 기록한다. 각 단계에서 트윈(STORE)에
-실반영한다:
-  - tray power/lifecycle/boot_stage (Redfish set_power 재사용)
-  - DHCP lease (provisioning._make_lease 재사용) — reboot는 기존 IP 재임대,
-    replace는 신규 시리얼·MAC → 신규 IP + 전체 PXE OS 재설치
-  - tenant_rejoin: 작업 시작 시 해당 트레이 DPU의 테넌트 attachment를
-    기억·해제(bridge release와 동일 역방향)하고 rejoin 단계에서
-    dpu.create_attachment로 재적용. 테넌트가 없던 트레이는 skip 표기.
+Tick-based state machine (same TICK_SEC cache pattern as the other engines):
+advances one stage per 2.5s TICK and records the measured duration per stage.
+Each stage is applied to the twin (STORE) for real:
+  - tray power/lifecycle/boot_stage (reuses Redfish set_power)
+  - DHCP lease (reuses provisioning._make_lease) — reboot re-leases the same IP,
+    replace uses a new serial/MAC → new IP + a full PXE OS reinstall
+  - tenant_rejoin: at op start, the tenant attachment on that tray's DPU is
+    remembered and detached (the reverse of bridge release), then reapplied via
+    dpu.create_attachment at the rejoin stage. Trays with no tenant are marked skip.
 
-진행 중 트레이는 observability가 busy_trays()를 통해 GPU idle·해당 테넌트
-SLO unavail로 집계하고, 알림 1건(TRAY_REBOOTING/TRAY_REPLACING)을 fire →
-in_service 도달 시 resolve 한다 (obs alerts → /emulator/v1/faults 피드 전파).
-리셋(STORE.seed_gen 변경) 시 초기화 + 데모 히스토리 샘플 2건 시드("(sample)")."""
+While a tray is in progress, observability counts it (via busy_trays()) as GPU
+idle and SLO unavailable for that tenant, fires one alert
+(TRAY_REBOOTING/TRAY_REPLACING) → resolves it when in_service is reached
+(obs alerts → propagated to the /emulator/v1/faults feed).
+On reset (STORE.seed_gen change), state is cleared + 2 demo history samples are
+seeded ("(sample)")."""
 import itertools
 import time
 from collections import deque
@@ -26,9 +28,9 @@ from .store import STORE, _iso
 
 router = APIRouter(prefix="/emulator/v1", tags=["trayops"])
 
-TICK_SEC = 2.5                    # 단계 진행 주기 (다른 엔진과 동일)
+TICK_SEC = 2.5                    # stage advance interval (same as other engines)
 HISTORY_MAX = 20
-READY_STAGE = "HostReady"         # provisioning.READY_STAGE와 동일 (순환 회피)
+READY_STAGE = "HostReady"         # same as provisioning.READY_STAGE (avoid a cycle)
 
 REBOOT_STAGES = ["power_cycle", "post", "nico_discovery", "dhcp_ip",
                  "boot", "attestation", "tenant_rejoin", "in_service"]
@@ -48,7 +50,7 @@ class TrayOpsEngine:
         self._alert_seq = itertools.count(1)
         self._swap_seq = itertools.count(1)
 
-    # ── topology (re)build — STORE reseed(리셋) 감지 ───────────────────
+    # ── topology (re)build — detect STORE reseed (reset) ───────────────────
     def _ensure_topology(self) -> bool:
         cur = getattr(STORE, "seed_gen", 0)
         if cur == self.seed_gen:
@@ -62,7 +64,7 @@ class TrayOpsEngine:
         return True
 
     def _seed_samples(self):
-        """리셋 직후 KPI/이력 패널이 비지 않도록 데모 샘플 2건 시드."""
+        """Seed 2 demo samples so the KPI/history panels are not empty right after reset."""
         trays = list(STORE.trays)
         if not trays:
             return
@@ -85,7 +87,7 @@ class TrayOpsEngine:
             "skipped": ["tenant_rejoin"], "succeeded": True, "at": now,
             "note": "(sample)"})
 
-    # ── alert helpers (ObsEngine _fire/_resolve 패턴) ──────────────────
+    # ── alert helpers (ObsEngine _fire/_resolve pattern) ──────────────────
     def _fire(self, key, severity, resource, summary):
         a = self.alerts.get(key)
         if a and a["state"] == "firing":
@@ -102,19 +104,19 @@ class TrayOpsEngine:
         if a and a["state"] == "firing":
             a["state"], a["at"] = "resolved", _iso()
 
-    # ── obs 연동 공개 함수 ────────────────────────────────────────────
+    # ── obs integration public helpers ────────────────────────────────────────────
     def busy_trays(self) -> Dict[str, Optional[str]]:
-        """진행 중 트레이 → 원 테넌트. obs가 GPU idle·SLO unavail 집계에 사용."""
+        """In-progress tray → its original tenant. Used by obs for GPU idle / SLO unavail counting."""
         return {tid: o["tenant_id"] for tid, o in self.inflight.items()}
 
     def alerts_for_obs(self) -> List[dict]:
-        """obs alerts() merge용 — domain 'trayops' 알람 전체."""
+        """For obs alerts() merge — all 'trayops' domain alarms."""
         self.tick()
         return [dict(a) for a in self.alerts.values()]
 
-    # ── tenant attachment 기억·해제 / 재적용 (bridge/dpu 로직 재사용) ──
+    # ── remember/detach & reapply tenant attachment (reuses bridge/dpu logic) ──
     def _detach(self, d) -> List[dict]:
-        """DPU의 테넌트 attachment를 해제하고 재적용에 필요한 정보 저장."""
+        """Detach the DPU's tenant attachment and store what is needed to reapply it."""
         saved = []
         for aid, a in [(k, v) for k, v in STORE.attachments.items()
                        if v["dpu_id"] == d.dpu_id]:
@@ -125,7 +127,7 @@ class TrayOpsEngine:
             d.functions.pop(a["function_id"], None)
             d.representors.pop(a["representor_id"], None)
             STORE.security_policies.pop(a["security_policy_id"], None)
-        # 마지막 attachment까지 회수된 테넌트의 네트워크 해제 (bridge와 동일)
+        # release the network of a tenant whose last attachment was reclaimed (same as bridge)
         for s in saved:
             t = s["tenant_id"]
             if not any(x["tenant_id"] == t for x in STORE.attachments.values()):
@@ -152,7 +154,7 @@ class TrayOpsEngine:
                             "NeoCloudEmulator.1.0.TrayTenantRejoinFailed",
                             [o["tray_id"], s["tenant_id"]])
 
-    # ── stage 실반영 ──────────────────────────────────────────────────
+    # ── apply stage to the twin ──────────────────────────────────────────────────
     def _apply_stage(self, o: dict, name: str):
         tray = STORE.trays.get(o["tray_id"])
         if not tray:
@@ -167,34 +169,34 @@ class TrayOpsEngine:
                 STORE.set_power(tray, "ForceOff")
         elif name == "hw_swap":
             STORE.set_power(tray, "ForceOff")
-            STORE.dhcp_leases.pop(o["tray_id"], None)   # 구 lease 회수
+            STORE.dhcp_leases.pop(o["tray_id"], None)   # reclaim the old lease
             n = next(self._swap_seq)
-            tray.serial = f"SN-{o['tray_id']}-R{n}"     # 신규 시리얼 가정
+            tray.serial = f"SN-{o['tray_id']}-R{n}"     # assume a new serial
             tray.mac_address = "52:54:01:%02x:%02x:%02x" % (
-                (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff)  # 신규 MAC
+                (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff)  # new MAC
             STORE.event("info", "NeoCloudEmulator.1.0.TrayHwSwapped",
                         [o["tray_id"], tray.serial, tray.mac_address])
         elif name == "post":
             STORE.set_power(tray, "On")
         elif name == "nico_discovery":
-            if o["op"] == "replace":                    # 신규 시리얼 등록
+            if o["op"] == "replace":                    # register the new serial
                 STORE.event("info",
                             "NeoCloudEmulator.1.0.TraySerialRegistered",
                             [o["tray_id"], tray.serial])
         elif name == "dhcp_ip":
             from . import provisioning as prov
             lease = prov._make_lease(tray)
-            if o["op"] == "reboot":                     # 기존 IP 재임대
+            if o["op"] == "reboot":                     # re-lease the same IP
                 old = o.get("old_lease")
                 if old:
                     lease["ip_address"] = old["ip_address"]
                     lease["mac_address"] = old["mac_address"]
-            else:                                       # 신규 MAC → 신규 IP
+            else:                                       # new MAC → new IP
                 lease["mac_address"] = tray.mac_address or lease["mac_address"]
                 o1, o2, o3, o4 = lease["ip_address"].split(".")
                 lease["ip_address"] = f"{o1}.{o2}.{o3}.{180 + int(o4) % 60}"
             STORE.dhcp_leases[o["tray_id"]] = lease
-        elif name == "pxe_os_install":                  # 전체 OS 재설치
+        elif name == "pxe_os_install":                  # full OS reinstall
             tray.boot_source = "Pxe"
             tray.boot_enabled = "Continuous"
         elif name == "attestation":
@@ -210,7 +212,7 @@ class TrayOpsEngine:
             STORE.set_power(tray, "On")
             tray.power_state = "On"
 
-    # ── 상태머신 진행 (tick당 1단계) ──────────────────────────────────
+    # ── state machine advance (one stage per tick) ──────────────────────────────────
     def _advance(self, o: dict):
         now = time.monotonic()
         cur = o["stages"][o["stage_idx"]]
@@ -221,7 +223,7 @@ class TrayOpsEngine:
             nxt = o["stages"][o["stage_idx"]]
             if nxt["name"] == "tenant_rejoin" and not o["saved"]:
                 nxt["status"], nxt["duration_s"] = "skipped", 0.0
-                continue                                # skip은 tick 미소모
+                continue                                # skip does not consume a tick
             break
         o["stage_started"] = now
         if nxt["name"] == "in_service":
@@ -262,7 +264,7 @@ class TrayOpsEngine:
             for o in list(self.inflight.values()):
                 self._advance(o)
 
-    # ── op 시작 ───────────────────────────────────────────────────────
+    # ── op start ───────────────────────────────────────────────────────
     def start(self, tray_id: str, op: str) -> dict:
         with STORE.lock:
             self._ensure_topology()
@@ -275,7 +277,7 @@ class TrayOpsEngine:
                          f"({self.inflight[tray_id]['op']})")
             d = STORE.dpus.get(tray.dpu_id)
             old_lease = STORE.dhcp_leases.get(tray_id)
-            saved = self._detach(d) if d else []        # 원 테넌트 기억·해제
+            saved = self._detach(d) if d else []        # remember/detach original tenant
             tenant = saved[0]["tenant_id"] if saved else None
             names = REBOOT_STAGES if op == "reboot" else REPLACE_STAGES
             now = time.monotonic()
@@ -288,7 +290,7 @@ class TrayOpsEngine:
                  "at": _iso()}
             o["stages"][0]["status"] = "running"
             self.inflight[tray_id] = o
-            self.last = time.time()      # 첫 단계가 최소 1 tick 유지되도록
+            self.last = time.time()      # so the first stage lasts at least 1 tick
             kind = "TRAY_REBOOTING" if op == "reboot" else "TRAY_REPLACING"
             label = "재기동" if op == "reboot" else "HW 교체"
             self._fire(("trayop", tray_id),
@@ -329,7 +331,7 @@ class TrayOpsEngine:
         rejoin = [h for h in hist
                   if "tenant_rejoin" in h.get("stage_durations", {})]
         ok = sum(1 for h in rejoin if h.get("succeeded"))
-        # 교체(replace) 특화 KPI — HW swap·OS 재설치·재조인
+        # replace-specific KPI — HW swap / OS reinstall / rejoin
         rep = [h for h in hist if h["op"] == "replace"]
         rep_ok = sum(1 for h in rep if h.get("succeeded"))
         reb = [h for h in hist if h["op"] == "reboot"]
@@ -345,7 +347,7 @@ class TrayOpsEngine:
                             if totals else 0.0),
             "rejoin_success_pct": (round(100.0 * ok / len(rejoin), 1)
                                    if rejoin else 100.0),
-            # 교체 작업 특화 지표
+            # replace-op-specific metrics
             "replace": {
                 "count": len(rep),
                 "avg_drain_s": avg("drain", rep),
@@ -353,13 +355,13 @@ class TrayOpsEngine:
                 "avg_discovery_s": avg("nico_discovery", rep),
                 "avg_os_install_s": avg("pxe_os_install", rep),
                 "avg_rejoin_s": avg("tenant_rejoin", rep),
-                "avg_total_s": avg_total(rep),      # 교체 MTTR
+                "avg_total_s": avg_total(rep),      # replace MTTR
                 "success_pct": (round(100.0 * rep_ok / len(rep), 1)
                                 if rep else 100.0),
             },
             "reboot": {
                 "count": len(reb),
-                "avg_total_s": avg_total(reb),      # 재기동 MTTR
+                "avg_total_s": avg_total(reb),      # reboot MTTR
             },
         }
 
@@ -376,21 +378,21 @@ ENGINE = TrayOpsEngine()
 # ── endpoints ─────────────────────────────────────────────────────────
 @router.post("/trayops/{tray_id}/reboot")
 def tray_reboot(tray_id: str):
-    """트레이 재기동 수명주기 시작 — power_cycle → … → tenant_rejoin →
-    in_service (tick당 1단계, 기존 IP 재임대)."""
+    """Start the tray reboot lifecycle — power_cycle → … → tenant_rejoin →
+    in_service (one stage per tick, re-lease the same IP)."""
     return ENGINE.start(tray_id, "reboot")
 
 
 @router.post("/trayops/{tray_id}/replace")
 def tray_replace(tray_id: str):
-    """트레이 HW 교체 수명주기 시작 — drain → hw_swap(신규 시리얼·MAC) →
-    … → pxe_os_install(전체 OS 재설치) → tenant_rejoin → in_service."""
+    """Start the tray HW-replace lifecycle — drain → hw_swap (new serial/MAC) →
+    … → pxe_os_install (full OS reinstall) → tenant_rejoin → in_service."""
     return ENGINE.start(tray_id, "replace")
 
 
 @router.get("/obs/tray-ops")
 def tray_ops():
-    """진행 중 트레이 작업 + 최근 이력(20) + KPI (MTTR/단계별 평균/재조인 성공률)."""
+    """In-progress tray ops + recent history (20) + KPI (MTTR / per-stage average / rejoin success rate)."""
     ENGINE.tick()
     with STORE.lock:
         return ENGINE.view()

@@ -49,4 +49,4 @@ def test_cluster(client):
     cl = client.get("/emulator/v1/cluster").json()
     assert cl["racks"] == len(STORE.racks)
     assert sum(s["racks"] for s in cl["sites"]) == len(STORE.racks)
-    # 사이트 컨트롤러(/emulator/v1/sites)는 NICo Emulator로 이관됨
+    # the site controllers (/emulator/v1/sites) were moved to the NICo Emulator

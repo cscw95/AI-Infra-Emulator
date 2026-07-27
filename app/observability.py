@@ -1,28 +1,31 @@
-"""통합 Observability 텔레메트리 생성기 — 30MW Vera Rubin NVL72 설계서 기반.
+"""Unified observability telemetry generator — based on the 30MW Vera Rubin
+NVL72 design document.
 
-4개 플레인을 하나의 API(prefix /emulator/v1/obs)로 노출한다:
-  - Compute plane  : DCGM 스타일 per-GPU 텔레메트리 (util/temp/power/XID/ECC)
-  - Rack/DCIM plane: 랙 전력·수열(inlet/outlet) 뷰
-  - SMCI DLC plane : in-row DLC-2 CDU (1차/2차 루프, 펌프, 누수, 알람)
-  - SLA plane      : 테넌트별 GPU 가용성·에러버짓 + 정규화 알림 + GPU↔DLC 상관
+Exposes 4 planes through a single API (prefix /emulator/v1/obs):
+  - Compute plane  : DCGM-style per-GPU telemetry (util/temp/power/XID/ECC)
+  - Rack/DCIM plane: rack power / heat (inlet/outlet) view
+  - SMCI DLC plane : in-row DLC-2 CDU (primary/secondary loop, pumps, leak, alarms)
+  - SLA plane      : per-tenant GPU availability / error budget + normalized
+                     alerts + GPU↔DLC correlation
 
-Assumption (SMCI DLC 토폴로지):
-  - SU당 in-row DLC-2 CDU 1대(풀클러스터 기준 총 11대), rated 1,600 kW
-  - 랙당 CDM(rack manifold) 1개 = CDU branch, 트레이는 콜드플레이트 DLC
-  - cdu_id = "cdu-{su_id}"  (예: cdu-su-4)
-  - Rubin GPU 보드파워는 CDU 1.6MW 정합을 위해 1,300W로 축소 가정
+Assumption (SMCI DLC topology):
+  - 1 in-row DLC-2 CDU per SU (11 total for the full cluster), rated 1,600 kW
+  - 1 CDM (rack manifold) per rack = a CDU branch; trays use cold-plate DLC
+  - cdu_id = "cdu-{su_id}"  (e.g. cdu-su-4)
+  - Rubin GPU board power is assumed reduced to 1,300W to fit the 1.6MW CDU
 
-동작 모델: 폴링 시각 기반 random-walk. 값은 TICK_SEC 캐시 단위로 1회만
-materialize 하고(전 GPU 매 요청 재계산 금지) 요청은 캐시를 필터/페이지한다.
-GPU↔DLC 결합: CDU 장애 주입 → flow_factor 저하 → 담당 랙 GPU 온도가 tick마다
-점진 상승 → 85°C 초과 thermal throttle / 90°C+ XID → alerts/correlate 반영.
-recover 시 tick마다 점진 정상화.
+Behavior model: poll-time-based random walk. Values are materialized only once
+per TICK_SEC cache unit (no per-request recompute of every GPU); a request
+filters/pages the cache. GPU↔DLC coupling: CDU fault injection → lower
+flow_factor → the affected rack's GPU temperature rises gradually each tick →
+thermal throttle above 85°C / XID at 90°C+ → reflected in alerts/correlate.
+On recover, it normalizes gradually each tick.
 
-Rack control plane (운영 콘솔 계약):
-  POST /racks/{rack_id}/control, POST /racks/control(일괄) —
+Rack control plane (operations console contract):
+  POST /racks/{rack_id}/control, POST /racks/control (bulk) —
   power_on/power_off/restart/power_cap/power_uncap/workload/cordon/uncordon.
-  제어 상태는 ObsEngine.rack_ctrl에 유지(리셋 시 초기화)되고 tick 캐시
-  (DCGM/racks/summary/SLO/alerts)에 즉시 반영된다."""
+  Control state is kept in ObsEngine.rack_ctrl (cleared on reset) and is
+  reflected immediately in the tick cache (DCGM/racks/summary/SLO/alerts)."""
 import itertools
 import random
 import time
@@ -38,14 +41,14 @@ from .store import STORE, GPU_PER_TRAY, _iso
 
 router = APIRouter(prefix="/emulator/v1/obs", tags=["observability"])
 
-# ── tunables (Assumption 값들) ─────────────────────────────────────────
-TICK_SEC = 2.5                    # 텔레메트리 캐시/랜덤워크 주기
-GPU_MEM_GB = 288                  # Rubin HBM 용량
-GPU_POWER_LIMIT_W = 1300.0        # Assumption: 1.6MW CDU 정합용 축소 보드파워
+# ── tunables (Assumption values) ─────────────────────────────────────────
+TICK_SEC = 2.5                    # telemetry cache / random-walk interval
+GPU_MEM_GB = 288                  # Rubin HBM capacity
+GPU_POWER_LIMIT_W = 1300.0        # Assumption: board power reduced to fit the 1.6MW CDU
 GPU_IDLE_POWER_W = 120.0
-RACK_OVERHEAD_KW = 24.0           # NVSwitch 트레이 9 + CPU/보드/팬 (Assumption)
-CDU_RATED_KW = 1600.0             # SMCI in-row DLC-2 정격 (Assumption)
-HEAT_CAPTURE = 0.97               # IT 전력 중 액체로 회수되는 열 비율
+RACK_OVERHEAD_KW = 24.0           # NVSwitch trays 9 + CPU/board/fans (Assumption)
+CDU_RATED_KW = 1600.0             # SMCI in-row DLC-2 rating (Assumption)
+HEAT_CAPTURE = 0.97               # fraction of IT power's heat captured by liquid
 THROTTLE_TEMP_C = 85.0
 XID_TEMP_C = 90.0
 
@@ -53,14 +56,14 @@ XID_TEMP_C = 90.0
 CTRL_ACTIONS = ("power_on", "power_off", "restart", "power_cap", "power_uncap",
                 "workload", "cordon", "uncordon")
 PROFILE_UTIL = {"idle": 2.0, "steady": 52.0, "train": 77.0, "burst": 92.0}
-RESTART_TICKS = 2                 # restart 후 부트에 걸리는 tick 수
+RESTART_TICKS = 2                 # number of ticks a restart takes to boot
 
 
 def _default_ctrl() -> dict:
     return {"power": "on", "restart_ticks": 0, "cap_kw": None,
             "profile": None, "cordoned": False, "reason": ""}
 SLO_TARGET_PCT = 99.5
-ERROR_BUDGET_MIN = 43200 * (100 - SLO_TARGET_PCT) / 100.0   # 30일 = 216분
+ERROR_BUDGET_MIN = 43200 * (100 - SLO_TARGET_PCT) / 100.0   # 30 days = 216 min
 
 INJECT_KINDS = ("pump_failure", "flow_loss", "leak", "hx_fouling", "filter_clog")
 
@@ -102,15 +105,15 @@ class _Cdu:
     rack_ids: List[str] = field(default_factory=list)
     fault: Optional[str] = None
     fault_at: Optional[str] = None
-    flow_factor: float = 1.0      # 1.0 = 정상 유량
-    temp_offset: float = 0.0      # 담당 랙 GPU 온도 가산(°C)
+    flow_factor: float = 1.0      # 1.0 = normal flow
+    temp_offset: float = 0.0      # added temperature for the assigned rack's GPUs (°C)
     hx_eff: float = 93.0
     filter_dp: float = 35.0
     coolant_level: float = 98.0
     leak_detected: bool = False
     leak_location: Optional[str] = None
     closed_branches: Set[str] = field(default_factory=set)
-    rack_extra: Dict[str, float] = field(default_factory=dict)   # 누수 랙 가산온도
+    rack_extra: Dict[str, float] = field(default_factory=dict)   # added temperature for leaking racks
     pumps: List[dict] = field(default_factory=list)
     alarms: Dict[str, dict] = field(default_factory=dict)        # open alarms
     d: dict = field(default_factory=dict)                        # per-tick derived
@@ -134,7 +137,7 @@ class ObsEngine:
         self.rack_hist: Dict[str, deque] = {}
         self.site_names: Dict[str, str] = {}
         self.alerts: Dict[tuple, dict] = {}
-        self.rack_ctrl: Dict[str, dict] = {}    # rack_id → 제어 상태
+        self.rack_ctrl: Dict[str, dict] = {}    # rack_id → control state
         self._alert_seq = itertools.count(1)
         self._faulted_prev: Set[str] = set()
         self.tenant_acc: Dict[str, dict] = {}
@@ -148,7 +151,7 @@ class ObsEngine:
         self._avg_util = 0.0
         self._it_power_mw = 0.0
 
-    # ── topology (re)build — STORE reseed 감지 ────────────────────────
+    # ── topology (re)build — detect STORE reseed ────────────────────────
     def _ensure_topology(self) -> bool:
         cur = getattr(STORE, "seed_gen", 0)
         if cur == self.seed_gen:
@@ -179,7 +182,7 @@ class ObsEngine:
     def _fire(self, key, domain, severity, resource, summary):
         a = self.alerts.get(key)
         if a and a["state"] == "firing":
-            a["severity"], a["summary"] = severity, summary     # 최신화
+            a["severity"], a["summary"] = severity, summary     # update to latest
             return
         self.alerts[key] = {"alert_id": f"al-{next(self._alert_seq):04d}",
                             "domain": domain, "severity": severity,
@@ -207,7 +210,7 @@ class ObsEngine:
                 w["util"] = _clamp(w["util"] + random.uniform(-4, 4), 62.0, 92.0)
                 w["temp"] = _clamp(w["temp"] + random.uniform(-1.2, 1.2), 58.0, 70.0)
 
-            # 1b) rack 제어 — restart 부트 진행
+            # 1b) rack control — restart boot progression
             for rid, ctl in self.rack_ctrl.items():
                 if ctl["power"] == "restart":
                     ctl["restart_ticks"] -= 1
@@ -219,7 +222,7 @@ class ObsEngine:
                                 STORE.set_power(STORE.trays[tid], "On")
                                 STORE.trays[tid].lifecycle_state = "Ready"
 
-            # 2) CDU 장애/복구 다이내믹스 (tick마다 점진 변화)
+            # 2) CDU fault/recovery dynamics (gradual change each tick)
             for c in self.cdus.values():
                 k = c.fault
                 if k == "flow_loss":
@@ -233,7 +236,7 @@ class ObsEngine:
                     c.hx_eff = max(62.0, c.hx_eff - 2.5)
                 elif k == "leak":
                     c.coolant_level = max(60.0, c.coolant_level - 1.5)
-                else:                                   # 정상/복구 진행
+                else:                                   # normal / recovery progression
                     c.flow_factor = min(1.0, c.flow_factor + 0.15)
                     c.filter_dp = max(35.0, c.filter_dp - 12.0)
                     c.hx_eff = min(93.0, c.hx_eff + 3.0)
@@ -253,7 +256,7 @@ class ObsEngine:
                         if c.rack_extra[rid] <= 0:
                             del c.rack_extra[rid]
 
-            # 3) tray → tenant 매핑 (DPU tenant attachment 기준)
+            # 3) tray → tenant mapping (based on DPU tenant attachment)
             tray_tenant = {}
             for d in STORE.dpus.values():
                 for f in d.functions.values():
@@ -261,8 +264,8 @@ class ObsEngine:
                         tray_tenant[d.compute_tray_id] = f.tenant_id
                         break
 
-            # 3b) 트레이 작업(재기동/HW 교체) 진행 중 트레이 — GPU idle +
-            #     원 테넌트 SLO unavail 집계 (trayops 지연 import — 순환 방지)
+            # 3b) trays with an in-progress op (reboot/HW replace) — counted as GPU idle +
+            #     SLO unavailable for the original tenant (trayops lazy import — avoid a cycle)
             try:
                 from . import trayops as _trayops
                 _trayops.ENGINE.tick()
@@ -270,7 +273,7 @@ class ObsEngine:
             except Exception:
                 busy_trays = {}
 
-            # 4) materialize — per-GPU + rack aggregate (tick당 1회)
+            # 4) materialize — per-GPU + rack aggregate (once per tick)
             gpus, by_uuid, rack_agg = [], {}, {}
             tray_off_seen = []           # (tray_id, tenant, rack_off)
             tenants: Dict[str, dict] = {}
@@ -294,10 +297,10 @@ class ObsEngine:
                 for tid in rack.trays:
                     tray = STORE.trays[tid]
                     tenant = tray_tenant.get(tid)
-                    tray_busy = tid in busy_trays        # 재기동/교체 진행 중
+                    tray_busy = tid in busy_trays        # reboot/replace in progress
                     if tray_busy and not tenant:
-                        tenant = busy_trays.get(tid)     # 원 테넌트로 SLO 집계
-                    # 트레이 단위 전원 Off (Redfish 등) — in-band 텔레메트리 유실
+                        tenant = busy_trays.get(tid)     # count SLO against the original tenant
+                    # per-tray power Off (Redfish, etc.) — in-band telemetry lost
                     tray_off = (not tray_busy
                                 and STORE.power_state(tray) == "Off")
                     no_ib = rack_off or tray_off
@@ -305,7 +308,7 @@ class ObsEngine:
                         trays_off_n += 1
                         tray_off_seen.append((tid, tenant, rack_off))
                     tray_bad = tray.health == "critical" and not no_ib
-                    # 부하 대상: 테넌트 할당 또는 워크로드 프로필 지정(데모 부하)
+                    # load target: tenant allocation or workload profile (demo load)
                     loaded = ((tenant is not None or
                                profile in ("steady", "train", "burst"))
                               and not no_ib and not cordoned
@@ -346,14 +349,14 @@ class ObsEngine:
                             power = max(60.0, GPU_IDLE_POWER_W + r.uniform(-15, 15))
                             clock = 1350.0
                         capped = bool(cap_w) and not no_ib and power > cap_w
-                        if capped:                       # rack power cap 반영
+                        if capped:                       # apply rack power cap
                             scale = cap_w / power
                             power = cap_w
                             util = round(util * max(0.35, scale), 1)
                             clock = min(clock, 1900.0)
                         temp = min(temp, 97.0)
-                        # rack off/restart: in-band(DCGM) 텔레메트리 수신 불가
-                        # — 판독값 null + state "off" (OOB/DCIM만 가용)
+                        # rack off/restart: in-band (DCGM) telemetry cannot be received
+                        # — readings null + state "off" (only OOB/DCIM available)
                         state = ("off" if no_ib else
                                  "faulted" if faulted else
                                  "throttled" if throttled else
@@ -403,7 +406,7 @@ class ObsEngine:
                             faulted_now.add(uuid)
                         if tenant:
                             alloc += 1
-                            if not no_ib:                # 가동 GPU 기준 평균
+                            if not no_ib:                # average over active GPUs
                                 util_sum += util
                                 util_n += 1
                             rack_tenants.add(tenant)
@@ -429,12 +432,12 @@ class ObsEngine:
                     "trays_off": trays_off_n,
                 }
 
-            # 5) CDU derived values — 물리 정합 (rack heat ≈ CDU measured_heat)
+            # 5) CDU derived values — physically consistent (rack heat ≈ CDU measured_heat)
             for c in self.cdus.values():
                 heat = sum(rack_agg[r]["it_kw"] for r in c.rack_ids) * HEAT_CAPTURE
                 flow2 = max(250.0, 1900.0 * c.flow_factor
                             * max(0.25, heat / CDU_RATED_KW))
-                dt2 = heat * 14.34 / flow2                    # Q=ṁ·cp·ΔT (물, lpm)
+                dt2 = heat * 14.34 / flow2                    # Q=ṁ·cp·ΔT (water, lpm)
                 supply2 = 30.0 + (1.0 - c.flow_factor) * 4.0
                 flow1 = flow2 * 0.85
                 dt1 = heat * 14.34 / flow1 / max(0.5, c.hx_eff / 100.0)
@@ -457,7 +460,7 @@ class ObsEngine:
                 ctl = agg["ctl"]
                 rack_views.append({
                     "rack_id": rid, "su_id": agg["su_id"], "site": agg["site"],
-                    # off 랙은 in-band 유실 — BMC/DCIM OOB 판독만 가용
+                    # off racks lose in-band — only BMC/DCIM OOB readings available
                     "telemetry_source": "oob" if agg["off"] else "inband",
                     "it_power_kw": round(agg["it_kw"], 1),
                     "gpu_power_kw": round(agg["gpu_kw"], 1),
@@ -492,11 +495,11 @@ class ObsEngine:
                                f"(cdu={self.rack_cdu[rid]}, +{agg['offset']:.1f}°C)")
                 else:
                     self._resolve(key)
-            # 7a-2) 트레이 단위 전원 Off 알림 (Redfish 등 개별 차단)
+            # 7a-2) per-tray power-Off alert (individual cutoff via Redfish, etc.)
             off_now = set()
             for tid, tenant, r_off in tray_off_seen:
                 if r_off:
-                    continue                     # 랙 알림이 커버
+                    continue                     # covered by the rack alert
                 off_now.add(tid)
                 key = ("tray-off", tid)
                 self._fire(key, "gpu",
@@ -508,7 +511,7 @@ class ObsEngine:
                         if k[0] == "tray-off" and k[1] not in off_now]:
                 self._resolve(key)
 
-            # 7b) rack 제어 알림 — 전원 차단(테넌트 영향 major)·cordon
+            # 7b) rack control alerts — power-off (tenant impact major) / cordon
             for rid, agg in rack_agg.items():
                 ctl, koff, kcord = agg["ctl"], ("ctl-off", rid), ("ctl-cordon", rid)
                 if agg["off"]:
@@ -532,7 +535,7 @@ class ObsEngine:
                 self._resolve(("gpu-xid", uuid))
             self._faulted_prev = faulted_now
 
-            # 8) SLO 분 누적 (cooling-caused unavailable / throttling)
+            # 8) SLO minute accumulation (cooling-caused unavailable / throttling)
             for tenant, st in tenants.items():
                 acc = self.tenant_acc.setdefault(tenant, {
                     "cooling_min": 0.0, "throttle_min": 0.0, "unavail_min": 0.0})
@@ -543,7 +546,7 @@ class ObsEngine:
                 if st["unavail"]:
                     acc["unavail_min"] += dt_min
 
-            # 9) history (rack 단위 base 기록 → GPU history 재구성용)
+            # 9) history (record per-rack base → for reconstructing GPU history)
             ts = _iso()
             for rid, agg in rack_agg.items():
                 self.rack_hist[rid].append({
@@ -702,7 +705,7 @@ class ObsEngine:
 
 
 def _fabric_alerts() -> List[dict]:
-    """UFM(IB)·NetQ(Ethernet) 상태를 fabric 도메인 알림으로 merge."""
+    """Merge UFM (IB) / NetQ (Ethernet) state as fabric-domain alerts."""
     out: List[dict] = []
     try:
         from . import ufm as _ufm, netq as _netq
@@ -742,13 +745,13 @@ def _fabric_alerts() -> List[dict]:
                            + str(first.get('detail', ''))[:60],
                 "at": _iso(), "state": "firing"})
     except Exception:
-        pass                                    # fabric 에뮬레이터 미가용 시 무시
+        pass                                    # ignore if the fabric emulator is unavailable
     return out
 
 
 def _trayops_alerts() -> List[dict]:
-    """트레이 재기동/HW 교체 작업 알림(domain 'trayops') merge —
-    /emulator/v1/faults 피드로도 전파된다 (provisioning.faults가 이 목록 사용)."""
+    """Merge tray reboot / HW-replace op alerts (domain 'trayops') —
+    also propagated to the /emulator/v1/faults feed (provisioning.faults uses this list)."""
     try:
         from . import trayops as _trayops
         return _trayops.ENGINE.alerts_for_obs()
@@ -757,17 +760,17 @@ def _trayops_alerts() -> List[dict]:
 
 
 def _storage_alerts() -> List[dict]:
-    """VAST(AI Storage)·Converged rail 상태를 storage 도메인 알림으로 merge.
+    """Merge VAST (AI Storage) / Converged rail state as storage-domain alerts.
 
-    ufm/netq처럼 엔진 공개 함수(alerts_for_obs)를 직접 호출한다 —
-    엔드포인트의 래핑 응답({count, alarms:[...]})을 언랩할 필요가 없다."""
+    Like ufm/netq, calls the engine's public helper (alerts_for_obs) directly —
+    no need to unwrap the endpoint's wrapped response ({count, alarms:[...]})."""
     out: List[dict] = []
     try:
         from . import vast as _vast, converged as _converged
         out.extend(_vast.ENGINE.alerts_for_obs())
         out.extend(_converged.ENGINE.alerts_for_obs())
     except Exception:
-        pass                                    # storage 에뮬레이터 미가용 시 무시
+        pass                                    # ignore if the storage emulator is unavailable
     return out
 
 
@@ -800,7 +803,7 @@ def summary():
             from . import vast as _vast
             storage = _vast.ENGINE.summary_for_obs()
         except Exception:
-            storage = None                     # storage 에뮬레이터 미가용 시
+            storage = None                     # if the storage emulator is unavailable
         return {
             "gpus": counts,
             "avg_util_pct": round(ENGINE._avg_util, 1),
@@ -829,14 +832,14 @@ def summary():
 
 # ── 2-3) DCGM plane ───────────────────────────────────────────────────
 def _gpu_attn(g: dict) -> bool:
-    """운영 콘솔 '예외만' 판정과 동일한 서버측 기준 (off = 판독 없음 → 제외)."""
+    """Server-side criteria matching the operations console's 'exceptions only' rule (off = no reading → excluded)."""
     if g["state"] == "off":
         return False
     return (g["state"] in ("faulted", "throttled") or g["temp_c"] >= 78.0
             or g["ecc_uncorr"] > 0 or g["pcie_replay"] >= 3)
 
 
-_GPU_SORT = {                          # off GPU(null 판독)는 최하위 정렬
+_GPU_SORT = {                          # off GPUs (null readings) sort last
     "temp": lambda g: -(g["temp_c"] if g["temp_c"] is not None else -273.0),
     "util": lambda g: -(g["util_pct"] if g["util_pct"] is not None else -1.0),
     "power": lambda g: -(g["power_w"] if g["power_w"] is not None else -1),
@@ -862,9 +865,9 @@ def dcgm_gpus(site: Optional[str] = None, su: Optional[str] = None,
             gs = [g for g in gs if g["tenant_id"] == tenant]
         if state:
             gs = [g for g in gs if g["state"] == state]
-        if attn:                               # 예외만 — 전 플릿 기준 필터
+        if attn:                               # exceptions only — filter across the whole fleet
             gs = [g for g in gs if _gpu_attn(g)]
-        if sort in _GPU_SORT:                  # 전 플릿 기준 정렬 후 페이지
+        if sort in _GPU_SORT:                  # sort across the whole fleet, then page
             gs = sorted(gs, key=_GPU_SORT[sort])
         return {"total": len(gs), "offset": offset, "limit": limit,
                 "gpus": gs[offset:offset + limit]}
@@ -872,7 +875,7 @@ def dcgm_gpus(site: Optional[str] = None, su: Optional[str] = None,
 
 @router.get("/dcgm/su-summary")
 def dcgm_su_summary(site: Optional[str] = None):
-    """SU 단위 집계 + 플릿 히스토그램 — 콘솔 히트맵/분포 라이브 바인딩용."""
+    """Per-SU aggregation + fleet histogram — for live-binding the console heatmap/distribution."""
     ENGINE.tick()
     with STORE.lock:
         sus: Dict[str, dict] = {}
@@ -886,7 +889,7 @@ def dcgm_su_summary(site: Optional[str] = None):
                 "active": 0, "throttled": 0, "faulted": 0, "off": 0,
                 "_util": 0.0, "_n": 0, "max_temp_c": 0.0, "ecc_uncorr": 0})
             s["gpus"] += 1
-            if g["state"] == "off":       # in-band 판독 없음 — 집계 제외
+            if g["state"] == "off":       # no in-band reading — excluded from aggregation
                 s["off"] += 1
                 continue
             if g["state"] in ("active", "throttled", "faulted"):
@@ -965,8 +968,8 @@ def _ctrl_state(ctl: dict) -> dict:
 
 
 def _apply_rack_control(rack_id: str, action: str, params: dict) -> dict:
-    """단일 랙에 제어 적용 (STORE.lock 보유 상태에서 호출)."""
-    ENGINE._ensure_topology()      # reseed 직후라면 먼저 재구축(제어 유실 방지)
+    """Apply control to a single rack (called while holding STORE.lock)."""
+    ENGINE._ensure_topology()      # rebuild first if just reseeded (avoid losing control state)
     rack = STORE.racks.get(rack_id)
     if not rack:
         raise HTTPException(404, f"rack {rack_id} not found")
@@ -1017,14 +1020,14 @@ def _apply_rack_control(rack_id: str, action: str, params: dict) -> dict:
 def rack_control(rack_id: str, body: RackControlBody):
     with STORE.lock:
         state = _apply_rack_control(rack_id, body.action, body.params)
-    ENGINE.tick(force=True)                      # 즉시 텔레메트리 수렴
+    ENGINE.tick(force=True)                      # converge telemetry immediately
     return {"rack_id": rack_id, "action": body.action,
             "applied": True, "state": state}
 
 
 @router.post("/racks/control")
 def racks_control(body: BulkControlBody):
-    """전체/사이트/SU/랙 목록 범위 일괄 제어."""
+    """Bulk control across a whole / site / SU / rack-list scope."""
     sc = body.scope
     with STORE.lock:
         if sc.rack_ids:

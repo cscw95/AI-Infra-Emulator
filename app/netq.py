@@ -1,20 +1,21 @@
-"""NetQ 에뮬레이터 — 사이트별 Spectrum-X converged Ethernet 패브릭을
-스위치/프로토콜/RoCE/검증(validation) 수준까지 에뮬레이션한다 (prefix /netq/v1).
+"""NetQ emulator — emulates each site's Spectrum-X converged Ethernet fabric
+down to the switch/protocol/RoCE/validation level (prefix /netq/v1).
 
-리소스·검증 체계는 NVIDIA NetQ의 공개 개념을 따른다.
+The resource/validation model follows NetQ's public concepts.
 
-Confirmed (공개 규격):
-  - NetQ validation check 카테고리: agents/bgp/evpn/interfaces/mlag(clag)/
-    mtu/roce/vlan/vxlan 등 (docs.nvidia.com Cumulus NetQ Validate Operations)
+Confirmed (public spec):
+  - NetQ validation check categories: agents/bgp/evpn/interfaces/mlag(clag)/
+    mtu/roce/vlan/vxlan, etc. (docs.nvidia.com Cumulus NetQ Validate Operations)
   - SN5600: Spectrum-4 ASIC, 64 x 800GbE, 51.2Tb/s (nvidia.com Spectrum-X)
-  - RoCE 모니터링 지표 축: PFC pause 프레임, ECN 마킹, congestion drop
-Assumption (비공개·미확정 — 임의 정합값):
-  - VR NVL72 사이트 converged Ethernet 구성: 사이트당 SN5600 스파인 2 +
-    SU당 리프 2 (스토리지/N-S converged, GPU 패브릭은 UFM/IB 담당)
-  - 리프 다운링크는 랙당 1x800G/리프 (트레이 aggregation, 64포트 정합용)
-  - Cumulus Linux 5.x 버전 문자열, MTU 9216, eBGP unnumbered 언더레이
-동작: ufm.py와 동일한 tick 캐시 패턴(TICK_SEC), 카운터는 tick_no 비례
-단조 증가. STORE.seed_gen 변경(리셋) 시 재구축 + 데모 샘플 이상 1건 시드."""
+  - RoCE monitoring metric axes: PFC pause frames, ECN marking, congestion drop
+Assumption (non-public / undetermined — arbitrary consistent values):
+  - VR NVL72 site converged Ethernet layout: 2 SN5600 spines per site +
+    2 leaves per SU (storage / N-S converged; the GPU fabric is handled by UFM/IB)
+  - Leaf downlink is 1x800G/leaf per rack (tray aggregation, to fit 64 ports)
+  - Cumulus Linux 5.x version string, MTU 9216, eBGP unnumbered underlay
+Behavior: same tick-cache pattern as ufm.py (TICK_SEC); counters increase
+monotonically in proportion to tick_no. On STORE.seed_gen change (reset),
+rebuild + seed one demo sample anomaly."""
 import itertools
 import time
 import zlib
@@ -33,7 +34,7 @@ TICK_SEC = 2.5
 SPINES_PER_SITE = 2                       # Assumption
 LEAVES_PER_SU = 2                         # Assumption
 MODEL = "SN5600"
-OS_VERSION = "Cumulus Linux 5.11"         # Assumption: 임의 버전 문자열
+OS_VERSION = "Cumulus Linux 5.11"         # Assumption: arbitrary version string
 INTERFACES_TOTAL = 64                     # Confirmed: SN5600 64x800GbE
 MTU = 9216
 CHECKS = ("bgp", "evpn", "vxlan", "mtu", "roce", "clag")
@@ -158,8 +159,8 @@ class NetqEngine:
                 if s["role"] == "leaf" and s["site"] == sid]
 
     def _if_planned(self, sw: dict) -> int:
-        """활성 인터페이스 계획 수 — leaf: 스파인 업링크 + 랙당 1 다운링크
-        (Assumption), spine: 사이트 내 전 리프."""
+        """Planned active interface count — leaf: spine uplinks + 1 downlink
+        per rack (Assumption); spine: all leaves within the site."""
         if sw["role"] == "leaf":
             return SPINES_PER_SITE + sw["racks"]
         return len(self._site_leaves(sw["site"]))
@@ -212,7 +213,7 @@ class NetqEngine:
             if check not in self.failed_checks:
                 self._resolve(("netq-check", check))
 
-    # ── site VNI/터널 파생 (STORE 세그먼트/테넌트 기반) ────────────────
+    # ── site VNI/tunnel derivation (from STORE segments/tenants) ────────────────
     def _site_vnis(self, sid: str) -> int:
         t_sites = _fabric._tenant_sites()
         return sum(1 for n in STORE.tenant_networks.values()
@@ -322,7 +323,7 @@ class NetqEngine:
                 for c in CHECKS]
 
     def alerts_for_obs(self) -> List[dict]:
-        """obs alerts() merge용 공개 함수 — domain 'fabric' 알람 전체."""
+        """Public helper for obs alerts() merge — all 'fabric' domain alarms."""
         self.tick()
         return [dict(a) for a in self.alerts.values()]
 
