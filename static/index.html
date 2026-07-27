@@ -2391,5 +2391,16 @@ document.addEventListener("keydown",e=>{
 poll();
 setInterval(poll, 4000);
 </script>
+<script src="/static/i18n-dict.js"></script>
+<script src="/static/i18n.js"></script>
+<script>
+// On KO|EN toggle, force an immediate re-render of the active section so
+// live-rendered content (site names, telemetry rows) flips language at once
+// instead of waiting for the next 4s poll cycle.
+document.addEventListener("click", function(e){
+  var t = e.target && e.target.closest && e.target.closest("#lang-toggle [data-lang]");
+  if(t){ setTimeout(function(){ try{ poll(); }catch(_){} }, 50); }
+});
+</script>
 </body>
 </html>
