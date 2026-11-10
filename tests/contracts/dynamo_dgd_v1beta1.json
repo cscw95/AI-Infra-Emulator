@@ -1,0 +1,233 @@
+{
+ "group": "nvidia.com",
+ "kind": "DynamoGraphDeployment",
+ "plural": "dynamographdeployments",
+ "schema": {
+  "properties": {
+   "apiVersion": {
+    "type": "string"
+   },
+   "kind": {
+    "type": "string"
+   },
+   "metadata": {
+    "type": "object"
+   },
+   "spec": {
+    "properties": {
+     "annotations": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "backendFramework": {
+      "enum": [
+       "sglang",
+       "vllm",
+       "trtllm"
+      ],
+      "type": "string"
+     },
+     "components": {
+      "items": {
+       "properties": {
+        "modelRef": {
+         "properties": {
+          "name": {
+           "minLength": 1,
+           "type": "string"
+          },
+          "revision": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "name"
+         ],
+         "type": "object"
+        },
+        "name": {
+         "maxLength": 63,
+         "minLength": 1,
+         "pattern": "^[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?$",
+         "type": "string"
+        },
+        "podTemplate": {
+         "type": "object"
+        },
+        "replicas": {
+         "format": "int32",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "type": {
+         "enum": [
+          "frontend",
+          "worker",
+          "prefill",
+          "decode",
+          "planner",
+          "epp",
+          "lpx"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "type": "object"
+      },
+      "maxItems": 25,
+      "type": "array"
+     },
+     "labels": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "status": {
+    "properties": {
+     "components": {
+      "additionalProperties": {
+       "properties": {
+        "availableReplicas": {
+         "format": "int32",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "componentKind": {
+         "enum": [
+          "PodClique",
+          "PodCliqueScalingGroup",
+          "Deployment",
+          "LeaderWorkerSet"
+         ],
+         "type": "string"
+        },
+        "componentNames": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "gpuPowerLimitWatts": {
+         "format": "int64",
+         "minimum": 1,
+         "type": "integer"
+        },
+        "gpusPerEngine": {
+         "format": "int64",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "gpusPerReplica": {
+         "format": "int64",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "readyReplicas": {
+         "format": "int32",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "replicas": {
+         "format": "int32",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "servedModelName": {
+         "type": "string"
+        },
+        "updatedReplicas": {
+         "format": "int32",
+         "minimum": 0,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "componentKind",
+        "replicas",
+        "updatedReplicas"
+       ],
+       "type": "object"
+      },
+      "type": "object"
+     },
+     "conditions": {
+      "items": {
+       "properties": {
+        "lastTransitionTime": {
+         "format": "date-time",
+         "type": "string"
+        },
+        "message": {
+         "maxLength": 32768,
+         "type": "string"
+        },
+        "observedGeneration": {
+         "format": "int64",
+         "minimum": 0,
+         "type": "integer"
+        },
+        "reason": {
+         "maxLength": 1024,
+         "minLength": 1,
+         "pattern": "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$",
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "True",
+          "False",
+          "Unknown"
+         ],
+         "type": "string"
+        },
+        "type": {
+         "maxLength": 316,
+         "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$",
+         "type": "string"
+        }
+       },
+       "required": [
+        "lastTransitionTime",
+        "message",
+        "reason",
+        "status",
+        "type"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "observedGeneration": {
+      "format": "int64",
+      "type": "integer"
+     },
+     "state": {
+      "enum": [
+       "initializing",
+       "pending",
+       "successful",
+       "failed"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "state"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "source": "ai-dynamo/dynamo v1.6.2 @ 3a524d0d70f9 nvidia.com_dynamographdeployments.yaml v1beta1 (Apache-2.0), pruned",
+ "version": "v1beta1"
+}

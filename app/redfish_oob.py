@@ -18,6 +18,7 @@ from . import oob, exchange
 from . import power_model as pm
 from . import observability as obs
 from . import dell
+from . import gpufaults
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish-oob"])
 
@@ -458,8 +459,21 @@ def gpu_reset(tid: str, body: Optional[GpuResetBody] = None):
         bad = [g for g in ids if not 0 <= g < tray.gpus]
         if bad:
             raise HTTPException(400, f"invalid GpuIds {bad} (0..{tray.gpus - 1})")
+        gf = gpufaults.on_gpu_reset(tid, ids)      # injected GPU faults (F10)
         if tray.health == "warning":
             tray.health = "ok"
+        if gf["remaining"]:
+            oob.sel_add(tid, "Critical", f"OOB GPU reset {ids} failed: fault persists "
+                        f"{gf['remaining']}", "GPU_RESET_FAIL", "Processor")
+            exchange.publish("health", "GpuResetFailed", "critical", tid,
+                             {"gpus": ids, "faults": gf["remaining"]},
+                             category="health")
+            return {"@odata.type": "#Task.v1_7_0.Task", "Id": f"gpureset-{tid}",
+                    "Name": "GpuReset", "TaskState": "Exception",
+                    "TaskStatus": "Critical", "System": tid, "GpuIds": ids,
+                    "Messages": [{"MessageId": "Base.1.0.GeneralError",
+                                  "Message": "GPU fault persists after reset"}],
+                    "Oem": {"NeoCloud": gf}, "EndTime": _iso()}
         oob.sel_add(tid, "OK", f"OOB GPU reset {ids}", "GPU_RESET", "Processor")
         exchange.publish("health", "GpuReset", "info", tid, {"gpus": ids},
                          category="health")

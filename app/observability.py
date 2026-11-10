@@ -300,6 +300,8 @@ class ObsEngine:
                       "faulted": 0, "off": 0}
             util_sum, util_n = 0.0, 0
             faulted_now: Set[str] = set()
+            from . import gpufaults                 # injected XID/NVLink/thermal (F10 source)
+            gf_map = gpufaults.gpu_map()
             for rack in STORE.racks.values():
                 c = self.cdus[self.rack_cdu[rack.rack_id]]
                 w = self.walks[rack.rack_id]
@@ -354,10 +356,18 @@ class ObsEngine:
                             temp = 34.0 + offset * 0.4 + r.uniform(-2, 2)
                             mem = r.uniform(2, 6)
                             nvl = r.uniform(0, 3)
+                        gf = None if no_ib else gf_map.get(uuid)
+                        if gf and gf["kind"] == "thermal":
+                            temp += gf["delta_c"] or 0.0
+                        elif gf and gf["kind"] == "nvlink":
+                            nvl = 0.0
                         throttled = loaded and temp >= THROTTLE_TEMP_C
+                        throttled = throttled or bool(gf and gf["kind"] == "thermal")
                         gpu_xid = loaded and temp >= XID_TEMP_C and h % 25 == 0
                         faulted = tray_bad or gpu_xid
                         xids = [79] if tray_bad else ([63] if gpu_xid else [])
+                        if gf and gf["kind"] != "thermal":
+                            faulted, xids = True, [gf["xid"]]
                         if no_ib:
                             power, clock = 0.0, 0.0
                         elif throttled:

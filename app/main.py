@@ -14,6 +14,7 @@ from . import observability
 from . import trayops
 from . import exchange, dps, oob, redfish_oob
 from . import security
+from . import dynamo, dynamo_frontend, gpufaults
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -44,6 +45,10 @@ app.include_router(trayops.router)
 app.include_router(dps.router)
 app.include_router(oob.router)
 app.include_router(exchange.router)
+app.include_router(dynamo.router)
+app.include_router(dynamo.k8s)
+app.include_router(dynamo_frontend.router)
+app.include_router(gpufaults.router)
 
 
 @app.get("/versions")
