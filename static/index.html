@@ -580,7 +580,7 @@ async function getJSON(url, opts){
   if(!r.ok) throw new Error(url+" -> "+r.status);
   return r.json();
 }
-const esc = (s)=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const esc = (s)=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 const trayShort = (id)=>{const m=String(id).match(/tray-\d+.*/);return m?m[0]:String(id);};
 const trayNum = (id)=>{const m=String(id).match(/tray-(\d+)/);return m?m[1]:String(id);};
