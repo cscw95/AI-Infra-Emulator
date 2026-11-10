@@ -216,7 +216,7 @@ def test_eventservice_push_leak_thermal_psu_sel(client, pushed):
     sub = client.post("/redfish/v1/EventService/Subscriptions",
                       json={"Destination": "http://127.0.0.1:8000/hook",
                             "Context": "nocp"}).json()
-    assert sub["Oem"]["Nvidia"]["Categories"] == ["leak", "thermal", "psu", "sel"]
+    assert sub["Oem"]["Nvidia"]["Categories"] == ["leak", "thermal", "psu", "sel", "machine"]
     _inject(client, kind="leak", target=TRAY)
     _inject(client, kind="psu_fail", target=RACK)
     _inject(client, kind="thermal", target=TRAY, delta_c=20)

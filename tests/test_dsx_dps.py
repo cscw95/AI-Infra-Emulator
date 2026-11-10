@@ -191,7 +191,7 @@ def test_operator_cap_adopted_as_manual(client):
 # ── DSX Exchange ──────────────────────────────────────────────────────
 def test_exchange_topics_and_sse(client):
     t = client.get("/exchange/v1/topics").json()
-    assert {x["name"] for x in t["topics"]} == {"power", "thermal", "leak", "grid", "health"}
+    assert {x["name"] for x in t["topics"]} == {"power", "thermal", "leak", "grid", "health", "machine"}
     client.post(f"/dps/v1/racks/{RACK}/profile", json={"profile": "inference"})
     client.post("/emulator/v1/oob/inject", json={"kind": "leak", "target": RACK})
     with client.stream("GET", "/exchange/v1/events?follow=false") as r:
