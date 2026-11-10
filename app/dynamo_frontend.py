@@ -226,6 +226,7 @@ def clear_kv_blocks():
             for w in ws:
                 dyn._kv_clear(d, w)
             d["kv"].clear()
+            dyn.kvbm.clear(d)
             out.append({"deployment": d["id"], "workers": ws})
         nxt = dyn.DYN.kv_events[-1]["seq"] if dyn.DYN.kv_events else 0
     return {"cleared": out, "kv_events_next": nxt}

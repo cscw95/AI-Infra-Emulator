@@ -160,8 +160,8 @@ def test_metric_names_are_upstream(client):
             for ln in t.splitlines() if ln and not ln.startswith("#")}
     ours = {f for f in fams if f.startswith("dynamo_")}
     assert ours and ours - NAMES - OPERATOR_NAMES == set()
-    assert {f for f in fams if not f.startswith("dynamo_")} <= {
-        f for f in fams if f.startswith("neocloud_")}
+    assert {f for f in fams if not f.startswith(("dynamo_", "kvbm_"))} <= {
+        f for f in fams if f.startswith("neocloud_")}     # kvbm_*: test_kvbm.py
     assert re.search(r'dynamo_frontend_requests_total\{[^}]*endpoint="chat_completions",'
                      r'request_type="unary",status="success",error_type=""\} 1', t)
     for lbl in re.findall(r'[{,]([A-Za-z_][A-Za-z0-9_]*)=', t):

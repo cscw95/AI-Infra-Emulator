@@ -1,0 +1,21 @@
+{
+ "names": [
+  "disk_cache_hit_rate",
+  "host_cache_hit_rate",
+  "matched_tokens",
+  "object_cache_hit_rate",
+  "object_read_failures",
+  "object_write_failures",
+  "offload_blocks_d2d",
+  "offload_blocks_d2h",
+  "offload_blocks_d2o",
+  "offload_blocks_h2d",
+  "offload_bytes_object",
+  "onboard_blocks_d2d",
+  "onboard_blocks_h2d",
+  "onboard_blocks_o2d",
+  "onboard_bytes_object"
+ ],
+ "prefix": "kvbm_",
+ "source": "ai-dynamo/dynamo v1.6.2 @ 3a524d0d70f9 lib/runtime/src/metrics/prometheus_names.rs pub mod kvbm (Apache-2.0)"
+}

@@ -48,6 +48,7 @@ app.include_router(exchange.router)
 app.include_router(dynamo.router)
 app.include_router(dynamo.k8s)
 app.include_router(dynamo_frontend.router)
+app.include_router(dynamo.kvbm.router)
 app.include_router(gpufaults.router)
 
 

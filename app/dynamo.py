@@ -55,7 +55,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .store import STORE, GPU_PER_TRAY, _iso
-from . import dps, gpufaults
+from . import dps, gpufaults, kvbm
 
 router = APIRouter(prefix="/dynamo/v1", tags=["dynamo"])
 
@@ -375,16 +375,17 @@ def _block_hash(prefix: str, i: int, kind: str = "seq") -> int:
     return _u64(f"{kind}:{prefix}:{i}")
 
 
-def _kv_emit(d: dict, worker: str, data):
+def _kv_emit(d: dict, worker: str, data, tier: str = "device"):
     eid = DYN._kv_ids.get(worker, 0)              # event_id is per publisher
     DYN._kv_ids[worker] = eid + 1
     DYN.kv_events.append({
         "seq": next(DYN._kv_seq), "deployment": d["id"], "worker": worker, "at": _iso(),
-        "router_event": {"worker_id": _u64(worker), "storage_tier": "device",
+        "router_event": {"worker_id": _u64(worker), "storage_tier": tier,
                          "event": {"event_id": eid, "data": data, "dp_rank": 0}}})
 
 
-def _kv_store(d: dict, prefix: str, worker: str, old: int, new: int):
+def _kv_store(d: dict, prefix: str, worker: str, old: int, new: int,
+              tier: str = "device"):
     a, b = old // KV_BLOCK_SIZE, new // KV_BLOCK_SIZE    # full blocks only
     if b > a:
         _kv_emit(d, worker, {"stored": {
@@ -392,14 +393,15 @@ def _kv_store(d: dict, prefix: str, worker: str, old: int, new: int):
             "start_position": a,
             "blocks": [{"block_hash": _block_hash(prefix, i),
                         "tokens_hash": _block_hash(prefix, i, "tok"),
-                        "mm_extra_info": None} for i in range(a, b)]}})
+                        "mm_extra_info": None} for i in range(a, b)]}}, tier)
 
 
-def _kv_remove(d: dict, prefix: str, worker: str, tokens: int):
+def _kv_remove(d: dict, prefix: str, worker: str, tokens: int,
+               tier: str = "device"):
     n = tokens // KV_BLOCK_SIZE
     if n:
         _kv_emit(d, worker, {"removed": {
-            "block_hashes": [_block_hash(prefix, i) for i in range(n)]}})
+            "block_hashes": [_block_hash(prefix, i) for i in range(n)]}}, tier)
 
 
 def _kv_clear(d: dict, worker: str):
@@ -663,6 +665,13 @@ def _run(body: GenerateBody, endpoint: str = "generate") -> dict:
         if dec_w is not None:
             kv_hit = min(body.prompt_tokens, cached)
             d["kv"].move_to_end(body.prefix_hash)
+    hit_tier = "G1" if kv_hit else None
+    onb = None
+    if body.prefix_hash and dec_w is None:     # F33: G1 miss → KVBM G2/G3/G4
+        onb = kvbm.onboard(d, ev, body.prefix_hash, body.prompt_tokens)
+        if onb:
+            kv_hit, hit_tier, dec_w = onb["tokens"], onb["tier"], onb["worker"]
+    kvbm.account(d, body.prompt_tokens, kv_hit, hit_tier)
     if dec_w is None:
         dec_w = max(ev["dec"], key=lambda w: (ev["ws"][w["id"]]["perf"],
                                               -_h(f"{rid}{w['id']}") % 997))
@@ -683,13 +692,18 @@ def _run(body: GenerateBody, endpoint: str = "generate") -> dict:
         while len(d["kv"]) > KV_CACHE_ENTRIES:
             k, (w, n) = d["kv"].popitem(last=False)
             _kv_remove(d, k, w, n)
+            kvbm.offload(d, k, w, n)
+        kvbm.enforce_g1(d)
     jitter = 0.94 + (_h(rid) % 1000) / 1000 * 0.12
     lat = _latency(d, ev, body.prompt_tokens, kv_hit, dec_w, pre_w, jitter)
+    lat["kv_onboard_ms"] = onb["onboard_ms"] if onb else 0.0
+    lat["ttft_ms"] = round(lat["ttft_ms"] + lat["kv_onboard_ms"], 2)
     out = body.max_tokens
     reasoning = int(out * m["reasoning"])
     res = {"id": rid, "deployment": d["id"], "model": d["model"],
            "tenant_id": body.tenant_id,
            "prompt_tokens": body.prompt_tokens, "kv_hit_tokens": kv_hit,
+           "kv_hit_tier": hit_tier,
            "completion_tokens": out, "total_tokens": body.prompt_tokens + out,
            "usage": usage_obj(body.prompt_tokens, kv_hit, out, reasoning), **lat,
            "e2e_ms": round(lat["ttft_ms"] + lat["tpot_ms"] * (out - 1), 2),
@@ -845,6 +859,7 @@ def metrics():
             L.append(f"neocloud_dynamo_perf_factor{{{lbl}}} {round(perf, 4)}")
         L.append('dynamo_operator_resources_total{resource_type="DynamoGraphDeployment"} '
                  f"{len(DYN.deps)}")
+        L += kvbm.metric_lines()
         return "\n".join(L) + "\n"
 
 
