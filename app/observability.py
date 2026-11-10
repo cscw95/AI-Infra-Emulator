@@ -1070,6 +1070,19 @@ def dlc_cdu(cdu_id: str):
         return ENGINE.cdu_detail(_cdu_or_404(cdu_id))
 
 
+def _publish_cdu(c: _Cdu, kind: str, recovered: bool):
+    """Mirror CDU faults onto the DSX Exchange bus (leak → leak topic, the
+    rest → thermal)."""
+    from . import exchange
+    topic = "leak" if kind == "leak" else "thermal"
+    exchange.publish(topic, ("CduRecovered" if recovered else "CduFault"),
+                     "info" if recovered else "critical", c.cdu_id,
+                     {"kind": kind, "su_id": c.su_id,
+                      "racks": sorted(c.closed_branches) or c.rack_ids[:1],
+                      "@odata.id": f"/emulator/v1/obs/dlc/cdus/{c.cdu_id}"},
+                     category=topic)
+
+
 @router.post("/dlc/cdus/{cdu_id}/inject")
 def dlc_inject(cdu_id: str, body: CduInject):
     ENGINE.tick()
@@ -1089,6 +1102,7 @@ def dlc_inject(cdu_id: str, body: CduInject):
             c.rack_extra[rid] = max(c.rack_extra.get(rid, 0.0), 4.0)
         STORE.event("critical", "NeoCloudEmulator.1.0.CduFaultInjected",
                     [cdu_id, body.kind])
+        _publish_cdu(c, body.kind, recovered=False)
     ENGINE.tick(force=True)
     with STORE.lock:
         return {"cdu_id": cdu_id, "fault": body.kind,
@@ -1109,6 +1123,8 @@ def dlc_recover(cdu_id: str):
         c.pumps[1].update(state="standby", rpm=0, power_w=40)
         STORE.event("info", "NeoCloudEmulator.1.0.CduRecovered",
                     [cdu_id, prev or "none"])
+        if prev:
+            _publish_cdu(c, prev, recovered=True)
     ENGINE.tick(force=True)
     with STORE.lock:
         return {"cdu_id": cdu_id, "recovered_from": prev,

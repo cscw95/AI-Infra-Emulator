@@ -1,4 +1,4 @@
-"""NICo Emulator — FastAPI app entrypoint (standalone, port 9000)."""
+"""AI Infra Emulator — FastAPI app entrypoint (standalone, port 9100)."""
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException
@@ -13,6 +13,7 @@ from . import ufm, netq
 from . import vast, converged
 from . import observability
 from . import trayops
+from . import exchange, dps
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -40,6 +41,17 @@ app.include_router(netq.router)
 app.include_router(vast.router)
 app.include_router(converged.router)
 app.include_router(trayops.router)
+app.include_router(dps.router)
+app.include_router(exchange.router)
+
+
+@app.get("/versions")
+@app.get("/emulator/v1/versions")
+def versions():
+    """DSX OS baseline version matrix (same payload in every NeoCloud repo)."""
+    from . import DSX_VERSIONS
+    return {**DSX_VERSIONS, "component": "ai-infra-emulator",
+            "component_version": __version__}
 
 
 @app.get("/healthz")

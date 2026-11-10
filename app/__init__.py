@@ -8,7 +8,7 @@ Redfish BMC. Owns the twin state; NICo Emulator (:9000) drives it over REST.
 """
 import os
 
-__version__ = "0.1.0"        # this emulator's own version
+__version__ = "0.2.0"        # this emulator's own version (DSX OS baseline)
 
 # The physical hardware/platform specs this twin reproduces. Header shows the
 # primary vendor reference; override with AI_INFRA_REF_URL for a fork/mirror.
@@ -23,4 +23,12 @@ EMULATED_NICO = {
     "note": "물리 규격 기반 트윈: Vera Rubin NVL72(72 Rubin GPU/36 Vera CPU), "
             "SMCI in-row DLC-2 CDU, VAST DASE, Quantum-X800 IB, Spectrum-X "
             "Ethernet, ConnectX-9/BlueField-4.",
+}
+
+# DSX OS baseline version matrix — identical across the four NeoCloud repos
+# (PLAN.md "기준 버전 매트릭스"). Served at /versions and /emulator/v1/versions.
+DSX_VERSIONS = {
+    "dsx_os": "2026.05", "nico": "2.3.0", "nvke": "0.23.1", "dps": "0.10",
+    "mission_control": "2.5", "doca": "3.x", "gpu_operator": "AICR recipe",
+    "k8s": ["1.33", "1.34"], "platform": "Vera Rubin NVL72",
 }
