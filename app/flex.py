@@ -263,7 +263,7 @@ def _enforce(feed: str, br: dict, hints: List[dict]):
         lo, hi = 0.0, max(0.0, dps.effective_limit_kw(d) - 1.0)
         for _ in range(40):
             f["reduce_kw"] = (lo + hi) / 2
-            if feed_measured_kw(feed) > br["target_kw"] * (1 + TOLERANCE * 0.5):
+            if feed_measured_kw(feed) > br["target_kw"] * (1 - TOLERANCE):  # jitter margin
                 lo = f["reduce_kw"]
             else:
                 hi = f["reduce_kw"]
