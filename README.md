@@ -190,3 +190,18 @@ tests/               pytest suite
 - Not yet modeled (design backlog): real DOCA Flow offload, OVS/OVN datapath, SPDM
   measured-boot attestation depth, per-rack fleet scale-out, Redfish EventService push
   delivery (now implemented, see DSX OS baseline).
+
+## Security hardening (opt-in, `app/security.py`)
+
+All controls default **off** (dev behaviour unchanged). Same env names in NICo-Emulator.
+
+| Env | Effect |
+|---|---|
+| `EMU_API_KEY` | POST/PUT/PATCH/DELETE need `X-API-Key: <key>` or `Authorization: Bearer <key>` (401 otherwise) |
+| `EMU_REDFISH_USER` + `EMU_REDFISH_PASSWORD` | HTTP Basic on every `/redfish/v1/*` except the service root, like a real BMC |
+| `EMU_CORS_ORIGINS` | comma list of browser origins (default: localhost :8000/:8090/:9000) |
+| `EMU_OUTBOUND_ALLOWLIST` | hosts / CIDRs / `.suffix` that EventService `Destination` may target (default `localhost,127.0.0.1,::1`). http/https only; link-local and cloud-metadata IPs are always refused; re-checked at delivery time |
+| `EMU_MAX_SUBSCRIPTIONS` (64), `EMU_SSE_MAX_CLIENTS` (64), `EMU_SSE_MAX_S` (3600) | EventService / SSE caps |
+| `EMU_MAX_BODY_BYTES` (1 MiB), `EMU_MAX_PAGE` (10000) | request body and `limit`/`top`/`pageSize` caps |
+
+Input bounds: DPS kW values finite and ≤ 1 GW, `gpus_per_rack` 1..576, PowerLimit `SetPoint` ≤ 50 kW (tray) / 1 MW (rack).

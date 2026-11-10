@@ -6,6 +6,7 @@ LogServices/SEL and the OOB GpuReset action.
 Chassis ids: a compute tray id (su-1-rack-00-tray-00) or a rack id
 (su-1-rack-00). Trays draw from the rack's shared power-shelf busbar, so a
 tray's PowerSupplies are the rack's shelf PSUs."""
+import math
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -222,6 +223,12 @@ def leak_detection(cid: str):
 
 
 # ── Controls/PowerLimit ───────────────────────────────────────────────
+# SetPoint ceilings: VR NVL72 tray ~ 9 kW, rack ~ 200 kW nameplate; leave room
+# for future SKUs while rejecting nonsense / overflow values.
+TRAY_MAX_SETPOINT_W = 50_000.0
+RACK_MAX_SETPOINT_W = 1_000_000.0
+
+
 class PowerLimitPatch(BaseModel):
     SetPoint: Optional[float] = None
     ControlMode: Optional[str] = None      # Automatic | Override | Manual | Disabled
@@ -282,6 +289,9 @@ def patch_power_limit(cid: str, body: PowerLimitPatch):
         clear = body.ControlMode in ("Automatic", "Disabled") or body.SetPoint is None
         if not clear and body.SetPoint <= 0:
             raise HTTPException(400, "SetPoint must be > 0 W")
+        max_w = TRAY_MAX_SETPOINT_W if kind == "tray" else RACK_MAX_SETPOINT_W
+        if not clear and (not math.isfinite(body.SetPoint) or body.SetPoint > max_w):
+            raise HTTPException(400, f"SetPoint must be <= {max_w:g} W for a {kind}")
         dps.DPS.sync()
         if kind == "tray":
             if clear:

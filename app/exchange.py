@@ -11,6 +11,7 @@ dispatcher) are called synchronously on every publish.
 import asyncio
 import itertools
 import json
+import os
 from collections import deque
 from typing import Callable, List, Optional
 
@@ -98,6 +99,12 @@ def topics():
                            for t, d in TOPICS.items()]}
 
 
+# SSE DoS guards: hard cap on stream lifetime and concurrent subscribers.
+SSE_MAX_S = float(os.environ.get("EMU_SSE_MAX_S", "3600"))
+SSE_MAX_CLIENTS = int(os.environ.get("EMU_SSE_MAX_CLIENTS", "64"))
+_SSE_CLIENTS = [0]
+
+
 @router.get("/events")
 async def events(topic: Optional[str] = None, since: int = 0,
                  limit: int = 200, stream: bool = True, follow: bool = True,
@@ -111,10 +118,27 @@ async def events(topic: Optional[str] = None, since: int = 0,
         if bad:
             raise HTTPException(422, f"unknown topic(s) {bad}; "
                                      f"valid: {list(TOPICS)}")
+    if not 0 <= timeout_s <= SSE_MAX_S or timeout_s != timeout_s:
+        raise HTTPException(422, f"timeout_s must be 0..{SSE_MAX_S:g}")
+    limit = max(1, min(limit, BUS.events.maxlen or 10000))
     if not stream:
         return recent(topic, since, limit)
+    if follow and _SSE_CLIENTS[0] >= SSE_MAX_CLIENTS:
+        raise HTTPException(503, f"too many SSE subscribers (max {SSE_MAX_CLIENTS})")
+    # 0 = "until disconnect", bounded by SSE_MAX_S so streams cannot pile up
+    timeout_s = timeout_s or SSE_MAX_S
 
     async def gen():
+        if follow:
+            _SSE_CLIENTS[0] += 1
+        try:
+            async for chunk in _gen():
+                yield chunk
+        finally:
+            if follow:
+                _SSE_CLIENTS[0] -= 1
+
+    async def _gen():
         last = since
         for e in recent(topic, last, limit):
             last = e["id"]

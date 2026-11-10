@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 from .store import STORE, _iso
 from . import models as m
 from . import exchange
+from . import security
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish"])
 
@@ -31,10 +32,13 @@ DEFAULT_PUSH_CATEGORIES = ["leak", "thermal", "psu", "sel"]
 PUSH_SYNC = os.environ.get("AI_INFRA_PUSH_SYNC") == "1"   # tests: deliver inline
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-push")
 _SEVERITY = {"critical": "Critical", "warning": "Warning", "info": "OK"}
+MAX_SUBSCRIPTIONS = int(os.environ.get("EMU_MAX_SUBSCRIPTIONS", "64"))
 
 
 def _http_post(url: str, payload: dict):
-    httpx.post(url, json=payload, timeout=3.0).raise_for_status()
+    security.check_outbound_url(url)          # re-check at send time (DNS rebinding)
+    httpx.post(url, json=payload, timeout=3.0,
+               follow_redirects=False).raise_for_status()
 
 
 def _redfish_event(ev: dict, sub: dict) -> dict:
@@ -670,14 +674,24 @@ def list_subscriptions():
 
 @router.post("/EventService/Subscriptions", status_code=201)
 def create_subscription(body: dict):
+    dest = body.get("Destination", "")
+    try:
+        security.check_outbound_url(dest)
+    except security.UnsafeURL as e:
+        raise HTTPException(400, f"Destination rejected: {e}")
+    for k in ("Name", "Context"):
+        if len(str(body.get(k) or "")) > 256:
+            raise HTTPException(400, f"{k} longer than 256 characters")
     with STORE.lock:
+        if len(_SUBSCRIPTIONS) >= MAX_SUBSCRIPTIONS:
+            raise HTTPException(503, f"subscription limit ({MAX_SUBSCRIPTIONS}) reached")
         sid = f"sub-{next(_sub_ids):04d}"
         sub = {
             "@odata.type": "#EventDestination.v1_15_0.EventDestination",
             "@odata.id": f"/redfish/v1/EventService/Subscriptions/{sid}",
             "Id": sid,
             "Name": body.get("Name", f"Subscription {sid}"),
-            "Destination": body.get("Destination", ""),
+            "Destination": dest,
             "EventTypes": body.get("EventTypes", ["Alert"]),
             "Protocol": body.get("Protocol", "Redfish"),
             "Context": body.get("Context", ""),

@@ -62,6 +62,22 @@ _OBS_PROFILE = {"idle": "idle", "steady": "inference",
                 "train": "training", "burst": "training"}
 SMOOTHING_CLIP = 0.75          # power smoothing removes 75% of transient spikes
 FLEX_MAX_DURATION_S = 24 * 3600
+# Input bounds (DoS / nonsense guards): 1 GW site ceiling, NVL576 rack ceiling,
+# object-count caps for the in-memory store.
+MAX_LIMIT_KW = 1_000_000.0
+MAX_GPUS_PER_RACK = 576
+MAX_DOMAINS = 256
+MAX_GROUPS = 1024
+MAX_FLEX_ACTIVE = 256
+
+
+def _bounded_kw(v, name: str, allow_zero: bool = False) -> float:
+    """Reject NaN/inf and values outside (0|>=0)..MAX_LIMIT_KW."""
+    if v is None or not math.isfinite(v) or v > MAX_LIMIT_KW or \
+            (v < 0 if allow_zero else v <= 0):
+        raise HTTPException(422, f"{name} must be {'>= 0' if allow_zero else '> 0'} "
+                                 f"and <= {MAX_LIMIT_KW:g} kW")
+    return float(v)
 
 
 def rack_peak_kw(n_gpu: int, profile: str = "max-p") -> float:
@@ -469,8 +485,11 @@ def create_domain(body: DomainCreate):
     with STORE.lock:
         DPS.sync()
         _check_mode(body.mode)
-        if body.operating_limit_kw <= 0:
-            raise HTTPException(422, "operating_limit_kw must be > 0")
+        _bounded_kw(body.operating_limit_kw, "operating_limit_kw")
+        if len(DPS.domains) >= MAX_DOMAINS:
+            raise HTTPException(503, f"power-domain limit ({MAX_DOMAINS}) reached")
+        if len(body.name) > 128:
+            raise HTTPException(422, "name longer than 128 characters")
         did = DPS.nid("pd")
         d = {"id": did, "name": body.name, "site": body.site,
              "operating_limit_kw": float(body.operating_limit_kw),
@@ -508,8 +527,7 @@ def patch_domain(did: str, body: DomainPatch):
             _check_mode(body.mode)
             d["mode"] = body.mode
         if body.operating_limit_kw is not None:
-            if body.operating_limit_kw <= 0:
-                raise HTTPException(422, "operating_limit_kw must be > 0")
+            _bounded_kw(body.operating_limit_kw, "operating_limit_kw")
             d["operating_limit_kw"] = float(body.operating_limit_kw)
         if body.smoothing is not None:
             d["smoothing"] = body.smoothing
@@ -536,6 +554,13 @@ def list_groups(domain: Optional[str] = None):
 def create_group(body: GroupCreate):
     with STORE.lock:
         _domain_or_404(body.domain)
+        if len(DPS.groups) >= MAX_GROUPS:
+            raise HTTPException(503, f"resource-group limit ({MAX_GROUPS}) reached")
+        _bounded_kw(body.min_kw, "min_kw", allow_zero=True)
+        if body.max_kw is not None:
+            _bounded_kw(body.max_kw, "max_kw")
+        if not 0 <= body.priority <= 1000:
+            raise HTTPException(422, "priority must be 0..1000")
         if body.max_kw is not None and body.max_kw < body.min_kw:
             raise HTTPException(422, "max_kw must be >= min_kw")
         gid = DPS.nid("rg")
@@ -624,6 +649,13 @@ def simulate(body: SimulateBody):
         limit = body.operating_limit_kw or (d["operating_limit_kw"] if d else None)
         if not limit or limit <= 0:
             raise HTTPException(422, "operating_limit_kw (or a domain) is required")
+        _bounded_kw(limit, "operating_limit_kw")
+        if body.gpus_per_rack is not None and \
+                not 1 <= body.gpus_per_rack <= MAX_GPUS_PER_RACK:
+            raise HTTPException(422, f"gpus_per_rack must be 1..{MAX_GPUS_PER_RACK}")
+        if len(body.workload_mix or {}) > 16 or any(
+                not math.isfinite(float(v)) for v in (body.workload_mix or {}).values()):
+            raise HTTPException(422, "workload_mix must hold finite weights")
         if body.profile not in PROFILES:
             raise HTTPException(422, f"profile must be one of {list(PROFILES)}")
         mix = {k: float(v) for k, v in (body.workload_mix or
@@ -702,11 +734,16 @@ def list_flex(domain: Optional[str] = None):
 def create_flex(body: FlexBody):
     with STORE.lock:
         d = _domain_or_404(body.domain)
-        if body.reduce_kw <= 0 or body.reduce_kw >= effective_limit_kw(d):
+        if not math.isfinite(body.reduce_kw) or body.reduce_kw <= 0 or \
+                body.reduce_kw >= effective_limit_kw(d):
             raise HTTPException(422, "reduce_kw must be > 0 and below the "
                                      "domain's effective limit")
         if not 0 < body.duration_s <= FLEX_MAX_DURATION_S:
             raise HTTPException(422, f"duration_s must be 1..{FLEX_MAX_DURATION_S}")
+        if len(DPS.flex) >= MAX_FLEX_ACTIVE:
+            _flex_reduce(body.domain)            # expire finished events first
+            if len(DPS.flex) >= MAX_FLEX_ACTIVE:
+                raise HTTPException(503, f"flex-event limit ({MAX_FLEX_ACTIVE}) reached")
         now = time.time()
         fid = DPS.nid("flex")
         f = {"id": fid, "domain": body.domain, "reduce_kw": float(body.reduce_kw),

@@ -2,7 +2,6 @@
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -14,6 +13,7 @@ from . import vast, converged
 from . import observability
 from . import trayops
 from . import exchange, dps, oob, redfish_oob
+from . import security
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -22,14 +22,11 @@ app = FastAPI(title="AI Infra Emulator", version=__version__,
                           "(Compute/DCGM, VAST storage, UFM/IB, NetQ/Converged, DLC, DPU, BMC). "
                           "Driven by the NICo Emulator control plane.")
 
-# NeoCloud OS control-plane (nocp :8000) + consoles (:8090) may call this service
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://127.0.0.1:8090",
-                   "http://127.0.0.1:9000", "http://localhost:8000",
-                   "http://localhost:8090", "http://localhost:9000"],
-    allow_methods=["*"], allow_headers=["*"],
-)
+# NeoCloud OS control-plane (nocp :8000) + consoles (:8090) may call this
+# service. Origins via EMU_CORS_ORIGINS; optional API key / Redfish Basic and
+# request limits via app.security (all off by default).
+app.add_middleware(security.SecurityMiddleware)
+security.add_cors(app)
 
 app.include_router(dpu.router)
 app.include_router(redfish.router)
