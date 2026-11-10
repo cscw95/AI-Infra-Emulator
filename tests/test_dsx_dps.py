@@ -7,7 +7,7 @@ from app import observability as obs
 RACK = "su-1-rack-00"
 
 
-def _tele(client, did="pd-gasan"):
+def _tele(client, did="pd-aif-stt-gasan-f1"):
     return client.get(f"/dps/v1/telemetry?domain={did}").json()["domains"][0]
 
 
@@ -18,21 +18,21 @@ def _racks(dom):
 def test_seeded_domains_and_groups(client):
     ds = client.get("/dps/v1/power-domains").json()["items"]
     ids = {d["id"] for d in ds}
-    assert "pd-gasan" in ids
-    d = client.get("/dps/v1/power-domains/pd-gasan").json()
+    assert "pd-aif-stt-gasan-f1" in ids
+    d = client.get("/dps/v1/power-domains/pd-aif-stt-gasan-f1").json()
     assert d["mode"] == "static" and d["operating_limit_kw"] > 0
     assert {g["id"] for g in d["groups"]} >= {"rg-su-1"}
-    gs = client.get("/dps/v1/resource-groups?domain=pd-gasan").json()["items"]
-    assert all(g["domain"] == "pd-gasan" for g in gs)
+    gs = client.get("/dps/v1/resource-groups?domain=pd-aif-stt-gasan-f1").json()["items"]
+    assert all(g["domain"] == "pd-aif-stt-gasan-f1" for g in gs)
     assert client.get("/dps/v1/power-domains/nope").status_code == 404
 
 
 def test_patch_domain_validation_and_publish(client):
-    assert client.patch("/dps/v1/power-domains/pd-gasan",
+    assert client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1",
                         json={"mode": "turbo"}).status_code == 422
-    assert client.patch("/dps/v1/power-domains/pd-gasan",
+    assert client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1",
                         json={"operating_limit_kw": 0}).status_code == 422
-    d = client.patch("/dps/v1/power-domains/pd-gasan",
+    d = client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1",
                      json={"mode": "dynamic", "smoothing": True,
                            "operating_limit_kw": 2000}).json()
     assert d["mode"] == "dynamic" and d["smoothing"] is True
@@ -42,12 +42,12 @@ def test_patch_domain_validation_and_publish(client):
 
 
 def test_static_vs_dynamic_allocation(client):
-    client.patch("/dps/v1/power-domains/pd-gasan", json={"mode": "static"})
+    client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1", json={"mode": "static"})
     st = _tele(client)
     caps = {round(r["cap_kw"], 1) for r in _racks(st)}
     assert len(caps) == 1                       # equal fixed share
     assert st["measured_kw"] <= st["effective_limit_kw"] + 0.5
-    client.patch("/dps/v1/power-domains/pd-gasan", json={"mode": "dynamic"})
+    client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1", json={"mode": "dynamic"})
     dy = _tele(client)
     assert dy["measured_kw"] >= st["measured_kw"] - 0.5       # steering ≥ static
     assert dy["throttled_racks"] <= st["throttled_racks"]
@@ -60,10 +60,10 @@ def test_static_vs_dynamic_allocation(client):
 
 
 def test_priority_group_wins_under_tight_limit(client):
-    client.patch("/dps/v1/power-domains/pd-gasan",
+    client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1",
                  json={"mode": "dynamic", "operating_limit_kw": 1200})
     g = client.post("/dps/v1/resource-groups",
-                    json={"domain": "pd-gasan", "name": "gold",
+                    json={"domain": "pd-aif-stt-gasan-f1", "name": "gold",
                           "racks": [RACK], "priority": 100}).json()
     assert g["racks"] == [RACK]
     dom = _tele(client)
@@ -71,20 +71,20 @@ def test_priority_group_wins_under_tight_limit(client):
     assert not gold["throttled"]
     assert any(r["throttled"] for r in _racks(dom) if r["rack_id"] != RACK)
     bad = client.post("/dps/v1/resource-groups",
-                      json={"domain": "pd-gasan", "name": "x",
+                      json={"domain": "pd-aif-stt-gasan-f1", "name": "x",
                             "racks": ["su-4-rack-00"], "priority": 1})
     assert bad.status_code in (404, 422)
 
 
 def test_group_max_kw_bounds(client):
-    client.patch("/dps/v1/power-domains/pd-gasan", json={"mode": "dynamic"})
+    client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1", json={"mode": "dynamic"})
     g = client.post("/dps/v1/resource-groups",
-                    json={"domain": "pd-gasan", "name": "capped",
+                    json={"domain": "pd-aif-stt-gasan-f1", "name": "capped",
                           "racks": [RACK, "su-1-rack-01"], "max_kw": 100}).json()
     grp = next(x for x in _tele(client)["groups"] if x["group_id"] == g["id"])
     assert grp["cap_kw"] <= 100.5
     assert client.post("/dps/v1/resource-groups",
-                       json={"domain": "pd-gasan", "name": "bad", "racks": [],
+                       json={"domain": "pd-aif-stt-gasan-f1", "name": "bad", "racks": [],
                              "min_kw": 50, "max_kw": 10}).status_code == 422
 
 
@@ -95,8 +95,8 @@ def test_create_domain_moves_racks(client):
     assert d.status_code == 201
     did = d.json()["id"]
     assert d.json()["racks"] == 2
-    gasan = client.get("/dps/v1/power-domains/pd-gasan").json()
-    assert all(RACK not in g["racks"] for g in gasan["groups"])
+    f1 = client.get("/dps/v1/power-domains/pd-aif-stt-gasan-f1").json()
+    assert all(RACK not in g["racks"] for g in f1["groups"])
     assert _tele(client, did)["allocated_kw"] <= 500.5
 
 
@@ -128,7 +128,7 @@ def test_telemetry_gpu_level(client):
 
 def test_simulate_static_vs_dynamic(client):
     r = client.post("/dps/v1/simulate",
-                    json={"domain": "pd-gasan", "operating_limit_kw": 10000,
+                    json={"domain": "pd-aif-stt-gasan-f1", "operating_limit_kw": 10000,
                           "workload_mix": {"training": 2, "inference": 6, "idle": 2},
                           "smoothing": True})
     assert r.status_code == 200
@@ -154,9 +154,9 @@ def test_simulate_static_vs_dynamic(client):
 
 
 def test_flex_event_lowers_limit_and_expires(client, monkeypatch):
-    d0 = client.get("/dps/v1/power-domains/pd-gasan").json()
+    d0 = client.get("/dps/v1/power-domains/pd-aif-stt-gasan-f1").json()
     r = client.post("/dps/v1/flex-events",
-                    json={"domain": "pd-gasan", "reduce_kw": 300, "duration_s": 60})
+                    json={"domain": "pd-aif-stt-gasan-f1", "reduce_kw": 300, "duration_s": 60})
     assert r.status_code == 201
     f = r.json()
     assert f["status"] == "active"
@@ -168,14 +168,14 @@ def test_flex_event_lowers_limit_and_expires(client, monkeypatch):
     # jump past the end of the event
     real = dps.time.time
     monkeypatch.setattr(dps.time, "time", lambda: real() + 120)
-    items = client.get("/dps/v1/flex-events?domain=pd-gasan").json()["items"]
+    items = client.get("/dps/v1/flex-events?domain=pd-aif-stt-gasan-f1").json()["items"]
     assert items[0]["status"] == "completed"
-    d1 = client.get("/dps/v1/power-domains/pd-gasan").json()
+    d1 = client.get("/dps/v1/power-domains/pd-aif-stt-gasan-f1").json()
     assert d1["effective_limit_kw"] == d0["operating_limit_kw"]
     grid = client.get("/exchange/v1/events?stream=false&topic=grid").json()
     assert grid[-1]["type"] == "FlexEventCompleted"
     assert client.post("/dps/v1/flex-events",
-                       json={"domain": "pd-gasan", "reduce_kw": 10 ** 9,
+                       json={"domain": "pd-aif-stt-gasan-f1", "reduce_kw": 10 ** 9,
                              "duration_s": 60}).status_code == 422
     assert client.post("/dps/v1/flex-events",
                        json={"domain": "nope", "reduce_kw": 1}).status_code == 404

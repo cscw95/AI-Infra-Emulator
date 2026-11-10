@@ -13,7 +13,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .store import STORE, _iso
-from . import dps, oob, exchange
+from . import dps
+from . import oob, exchange
+from . import power_model as pm
 from . import observability as obs
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish-oob"])
@@ -223,10 +225,17 @@ def leak_detection(cid: str):
 
 
 # ── Controls/PowerLimit ───────────────────────────────────────────────
-# SetPoint ceilings: VR NVL72 tray ~ 9 kW, rack ~ 200 kW nameplate; leave room
-# for future SKUs while rejecting nonsense / overflow values.
-TRAY_MAX_SETPOINT_W = 50_000.0
-RACK_MAX_SETPOINT_W = 1_000_000.0
+# SetPoint range (power_model): rack AllowableMax = MaxP 227 kW (NOCP spec),
+# tray AllowableMax = rack MaxP / 18 = 12.6 kW. Like a real BMC, a SetPoint
+# outside [AllowableMin, AllowableMax] is rejected with 400, never clamped.
+TRAY_MIN_SETPOINT_W = 200.0
+
+
+def _setpoint_range(kind: str, rack_id: str):
+    if kind == "tray":
+        return TRAY_MIN_SETPOINT_W, round(pm.TRAY_ENVELOPE_W, 1)
+    n_gpu = dps.DPS.n_gpu(rack_id) or pm.GPUS_PER_RACK
+    return dps.STANDBY_KW * 1000, round(pm.rack_kw(n_gpu) * 1000, 1)
 
 
 class PowerLimitPatch(BaseModel):
@@ -241,13 +250,12 @@ def _power_limit_view(cid: str) -> dict:
         tp = dps.tray_power(cid, rec)
         sp = dps.DPS.tray_limit_w.get(cid)
         eff, meas = tp["cap_w"], tp["measured_w"]
-        lo, hi = 200.0, round(rec.get("peak_kw", 0) * 1000 / 18, 1)
     else:
         sp = dps.DPS.manual_cap.get(rack_id)
         sp = sp * 1000 if sp else None
         eff = rec.get("cap_kw", 0.0) * 1000
         meas = rec.get("measured_kw", 0.0) * 1000
-        lo, hi = dps.STANDBY_KW * 1000, round(rec.get("peak_kw", 0) * 1000, 1)
+    lo, hi = _setpoint_range(kind, rack_id)
     return {"@odata.type": "#Control.v1_5_0.Control",
             "@odata.id": f"/redfish/v1/Chassis/{cid}/Controls/PowerLimit",
             "Id": "PowerLimit", "Name": f"Power Limit {cid}",
@@ -289,10 +297,12 @@ def patch_power_limit(cid: str, body: PowerLimitPatch):
         clear = body.ControlMode in ("Automatic", "Disabled") or body.SetPoint is None
         if not clear and body.SetPoint <= 0:
             raise HTTPException(400, "SetPoint must be > 0 W")
-        max_w = TRAY_MAX_SETPOINT_W if kind == "tray" else RACK_MAX_SETPOINT_W
-        if not clear and (not math.isfinite(body.SetPoint) or body.SetPoint > max_w):
-            raise HTTPException(400, f"SetPoint must be <= {max_w:g} W for a {kind}")
         dps.DPS.sync()
+        lo, hi = _setpoint_range(kind, rack_id)
+        if not clear and (not math.isfinite(body.SetPoint)
+                          or not lo <= body.SetPoint <= hi):
+            raise HTTPException(400, f"SetPoint must be within AllowableMin {lo:g} W .. "
+                                     f"AllowableMax {hi:g} W for a {kind}")
         if kind == "tray":
             if clear:
                 dps.DPS.tray_limit_w.pop(cid, None)

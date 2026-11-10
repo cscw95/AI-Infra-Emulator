@@ -62,7 +62,7 @@ NeoCloud repos):
 ### New endpoints
 
 Chassis `{id}` is a compute tray (`su-1-rack-00-tray-00`) or a rack (`su-1-rack-00`).
-Trays share the rack's power-shelf busbar (6 shelves × 6 Delta 5.5 kW PSUs).
+Trays share the rack's power-shelf busbar (4 shelves × 110 kW, 6 PSUs each = 440 kW; see `app/power_model.py`).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -96,8 +96,16 @@ Trays share the rack's power-shelf busbar (6 shelves × 6 Delta 5.5 kW PSUs).
 ### Power model and the single cap source
 
 - Hierarchy: PowerDomain (facility OperatingLimit) > ResourceGroup > Rack > Tray > GPU.
-  Each site is seeded as one domain (`pd-gasan`, `pd-ansan`) at 80% of nameplate, with
-  one resource group per SU (`rg-su-N`), mode `static`.
+  Each NOCP ComputeBlock (floor) is seeded as one domain `pd-{block_id}`
+  (`pd-aif-stt-gasan-f1` 6 MW, `pd-aif-stt-gasan-f2` 3 MW, `pd-aif-igis-ansan-f1` 12.9 MW,
+  `pd-aif-igis-ansan-f2` 10.4 MW) with OperatingLimit = the block budget, one resource
+  group per SU (`rg-su-N`), mode `static`. (Replaces the per-site `pd-gasan`/`pd-ansan`.)
+- Rack power (`app/power_model.py`, NCP VR NVL72 reference design): MaxP 227 kW, MaxQ 187 kW.
+  Rubin GPU 2300 W at Max-P → GPU 165.6 kW + overhead 61.4 kW (9 NVSwitch trays × 2.4 kW +
+  18 tray hosts × 2.21 kW). MaxQ GPU = (187 − 61.4)/72 = 1744 W. WPPS profiles are rack
+  fractions of MaxP (max-q 187/227, training 0.92, balanced 0.87, inference 0.75).
+  Redfish rack PowerLimit AllowableMax = 227 000 W, tray = 227 000/18 = 12 611 W; a SetPoint
+  outside the range is a 400 (no silent clamp). Power shelves 4 × 110 kW (6 × 18.3 kW PSU).
 - `static`: every rack gets an equal share. `dynamic` (rack power steering): racks get
   their demand by group priority, then leftover headroom is redistributed up to each
   rack's nameplate. `smoothing` clips 75% of transient spikes.

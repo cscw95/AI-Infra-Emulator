@@ -3,7 +3,7 @@ LeakDetection / SEL / PowerLimit / Chassis.Reset / GpuReset), EventService
 push, OOB summary and the version matrix."""
 import pytest
 
-from app import redfish
+from app import redfish, oob
 from app.store import STORE
 from app import observability as obs
 
@@ -32,7 +32,7 @@ def test_versions_matrix(client):
 def test_power_subsystem_rack_and_tray(client):
     rk = client.get(f"/redfish/v1/Chassis/{RACK}/PowerSubsystem").json()
     assert rk["@odata.type"].startswith("#PowerSubsystem")
-    assert rk["CapacityWatts"] == 36 * 5500
+    assert rk["CapacityWatts"] == 24 * oob.PSU_RATED_W == 440_000
     assert rk["Allocation"]["AllocatedWatts"] > 0
     tr = client.get(f"/redfish/v1/Chassis/{TRAY}/PowerSubsystem").json()
     assert tr["Oem"]["Nvidia"]["SharedBusbar"] is True
@@ -41,7 +41,7 @@ def test_power_subsystem_rack_and_tray(client):
 
 def test_power_supplies_collection_and_member(client):
     col = client.get(f"/redfish/v1/Chassis/{RACK}/PowerSubsystem/PowerSupplies").json()
-    assert col["Members@odata.count"] == 36
+    assert col["Members@odata.count"] == 24
     psu = client.get(f"/redfish/v1/Chassis/{RACK}/PowerSubsystem/PowerSupplies/PS0-PSU0").json()
     assert psu["Status"]["Health"] == "OK"
     assert psu["Metrics"]["OutputPowerWatts"]["Reading"] > 0
@@ -242,7 +242,7 @@ def test_eventservice_category_filter_and_failure(client, monkeypatch):
     _inject(client, kind="leak", target=TRAY)                    # filtered out
     st = client.get(f"/redfish/v1/EventService/Subscriptions/{sub['Id']}").json()
     assert st["Oem"]["Nvidia"]["Failed"] == 0
-    client.post("/dps/v1/flex-events", json={"domain": "pd-gasan",
+    client.post("/dps/v1/flex-events", json={"domain": "pd-aif-stt-gasan-f1",
                                              "reduce_kw": 100, "duration_s": 60})
     st = client.get(f"/redfish/v1/EventService/Subscriptions/{sub['Id']}").json()
     assert st["Oem"]["Nvidia"]["Failed"] == 1
@@ -256,7 +256,7 @@ def test_oob_summary_contract(client):
     assert s["racks"] and all(r["site"] == "gasan" for r in s["racks"])
     assert SUMMARY_KEYS <= set(s["racks"][0])
     r0 = s["racks"][0]
-    assert r0["bmc_total"] == 18 and r0["psu_total"] == 36
+    assert r0["bmc_total"] == 18 and r0["psu_total"] == 24
     assert r0["leak"] == "OK" and r0["power_kw"] > 0 and r0["cap_kw"] >= r0["power_kw"]
     assert client.get(f"/emulator/v1/oob/racks/{RACK}").json()["trays"][0]["bmc_reachable"]
     assert client.get("/emulator/v1/oob/racks/nope").status_code == 404

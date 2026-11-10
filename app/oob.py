@@ -22,11 +22,12 @@ from .store import STORE, POWER_SHELVES, _iso
 from . import exchange
 from . import dps
 from . import observability as obs
+from . import power_model as pm
 
 router = APIRouter(prefix="/emulator/v1/oob", tags=["oob"])
 
-PSU_PER_SHELF = 6
-PSU_RATED_W = 5500.0            # Delta 5.5 kW PSU in an ORv3-style power shelf
+PSU_PER_SHELF = pm.PSU_PER_SHELF
+PSU_RATED_W = pm.PSU_RATED_W    # 110 kW shelf / 6 PSUs = 18.3 kW (NOCP spec power_shelf_kw)
 INLET_BASE_C = 24.0
 INLET_WARN_C = 30.0
 INLET_CRIT_C = 35.0

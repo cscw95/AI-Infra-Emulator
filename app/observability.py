@@ -9,10 +9,12 @@ Exposes 4 planes through a single API (prefix /emulator/v1/obs):
                      alerts + GPU↔DLC correlation
 
 Assumption (SMCI DLC topology):
-  - 1 in-row DLC-2 CDU per SU (11 total for the full cluster), rated 1,600 kW
+  - 1 in-row DLC-2 CDU per SU (11 total for the full cluster), rated 4,000 kW
+    (one 16-rack SU = 16 × 227 kW MaxP = 3.6 MW IT; NOCP HAC TDP ~3.9 MW)
   - 1 CDM (rack manifold) per rack = a CDU branch; trays use cold-plate DLC
   - cdu_id = "cdu-{su_id}"  (e.g. cdu-su-4)
-  - Rubin GPU board power is assumed reduced to 1,300W to fit the 1.6MW CDU
+  - Rack/GPU power follows the NCP VR NVL72 reference design (power_model:
+    rack MaxP 227 kW / MaxQ 187 kW, Rubin GPU 2,300 W at Max-P)
 
 Behavior model: poll-time-based random walk. Values are materialized only once
 per TICK_SEC cache unit (no per-request recompute of every GPU); a request
@@ -38,16 +40,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .store import STORE, GPU_PER_TRAY, _iso
+from . import power_model as pm
 
 router = APIRouter(prefix="/emulator/v1/obs", tags=["observability"])
 
 # ── tunables (Assumption values) ─────────────────────────────────────────
 TICK_SEC = 2.5                    # telemetry cache / random-walk interval
 GPU_MEM_GB = 288                  # Rubin HBM capacity
-GPU_POWER_LIMIT_W = 1300.0        # Assumption: board power reduced to fit the 1.6MW CDU
-GPU_IDLE_POWER_W = 120.0
-RACK_OVERHEAD_KW = 24.0           # NVSwitch trays 9 + CPU/board/fans (Assumption)
-CDU_RATED_KW = 1600.0             # SMCI in-row DLC-2 rating (Assumption)
+GPU_POWER_LIMIT_W = pm.GPU_MAXP_W           # 2300 W Rubin board power at Max-P
+GPU_IDLE_POWER_W = 200.0
+RACK_OVERHEAD_KW = pm.RACK_OVERHEAD_KW      # 61.4 kW: NVSwitch trays 9 + CPU/board/fans
+CDU_RATED_KW = 4000.0             # in-row DLC CDU sized for a 16-rack VR SU (Assumption)
 HEAT_CAPTURE = 0.97               # fraction of IT power's heat captured by liquid
 THROTTLE_TEMP_C = 85.0
 XID_TEMP_C = 90.0

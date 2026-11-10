@@ -62,12 +62,12 @@ def test_subscription_cap(client, monkeypatch):
 # ── auth ──────────────────────────────────────────────────────────────
 def test_api_key_off_by_default(client):
     assert client.post("/dps/v1/flex-events", json={
-        "domain": "pd-gasan", "reduce_kw": 10, "duration_s": 60}).status_code == 201
+        "domain": "pd-aif-stt-gasan-f1", "reduce_kw": 10, "duration_s": 60}).status_code == 201
 
 
 def test_api_key_required_on_mutations(client, monkeypatch):
     monkeypatch.setenv("EMU_API_KEY", "s3cret")
-    body = {"domain": "pd-gasan", "reduce_kw": 10, "duration_s": 60}
+    body = {"domain": "pd-aif-stt-gasan-f1", "reduce_kw": 10, "duration_s": 60}
     assert client.post("/dps/v1/flex-events", json=body).status_code == 401
     assert client.post("/dps/v1/flex-events", json=body,
                        headers={"X-API-Key": "nope"}).status_code == 401
@@ -121,10 +121,10 @@ def test_simulate_bounds(client):
 
 def test_flex_and_domain_bounds(client):
     assert client.post("/dps/v1/flex-events", json={
-        "domain": "pd-gasan", "reduce_kw": -5}).status_code == 422
+        "domain": "pd-aif-stt-gasan-f1", "reduce_kw": -5}).status_code == 422
     assert client.post("/dps/v1/power-domains", json={
         "name": "x", "operating_limit_kw": 1e15}).status_code == 422
-    assert client.patch("/dps/v1/power-domains/pd-gasan",
+    assert client.patch("/dps/v1/power-domains/pd-aif-stt-gasan-f1",
                         json={"operating_limit_kw": 1e15}).status_code == 422
 
 

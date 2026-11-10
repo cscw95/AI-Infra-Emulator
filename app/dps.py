@@ -1,8 +1,9 @@
 """DPS (Dynamic Power Software) / DSX MaxLPS emulation — nvidia.dcpower.v1 shape.
 
 Power hierarchy: PowerDomain (facility OperatingLimit) > ResourceGroup >
-Rack > Tray > GPU. Each site is seeded as one PowerDomain whose resource
-groups are its SUs. Allocation modes:
+Rack > Tray > GPU. Each NOCP ComputeBlock (floor) is seeded as one
+PowerDomain `pd-{block_id}` whose OperatingLimit is the block's contracted
+budget (power_mw × 1000) and whose resource groups are its SUs. Allocation modes:
   static  — every rack gets an equal fixed share of the domain limit
   dynamic — rack power steering: racks get their demand (by group priority),
             leftover headroom is redistributed up to each rack's peak
@@ -26,30 +27,34 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .store import STORE, GPU_PER_TRAY, _iso
+from .store import STORE, GPU_PER_TRAY, COMPUTE_BLOCKS, _iso
 from . import exchange
 from . import observability as obs
+from . import power_model as pm
 
 router = APIRouter(prefix="/dps/v1", tags=["dps-maxlps"])
 
 # ── power model (Assumption values, consistent with observability) ────
-GPU_TDP_W = obs.GPU_POWER_LIMIT_W          # 1300 W board power at max-p
+GPU_TDP_W = obs.GPU_POWER_LIMIT_W          # 2300 W board power at max-p (power_model)
 RACK_OVERHEAD_KW = obs.RACK_OVERHEAD_KW    # NVSwitch/CPU/board/fans at full load
 GPU_IDLE_FRAC = 0.09                       # idle GPU power as fraction of TDP
 STANDBY_KW = 1.5                           # rack powered off (BMC/DPU rails)
 TOKENS_PER_GPU_S = 1000.0                  # relative throughput unit at max-p, util 1.0
 
+_PROFILE_TEXT = {
+    "max-p": (1.00, "Maximum performance — full board power (default)"),
+    "training": (0.97, "WPPS training — clocks tuned for sustained GEMM"),
+    "balanced": (0.93, "WPPS balanced — best perf/W for mixed fleets"),
+    "inference": (0.88, "WPPS inference — memory-bound decode, lower clocks"),
+    "max-q": (0.82, "Maximum efficiency — lowest power per token"),
+}
+# power_frac = GPU power fraction of Max-P, derived so that a full rack peaks
+# at rack_kw = RACK_MAXP_KW × rack_frac (max-p 227 kW, max-q 187 kW).
 PROFILES = {
-    "max-p": {"power_frac": 1.00, "perf_frac": 1.00,
-              "description": "Maximum performance — full board power (default)"},
-    "training": {"power_frac": 0.92, "perf_frac": 0.97,
-                 "description": "WPPS training — clocks tuned for sustained GEMM"},
-    "balanced": {"power_frac": 0.85, "perf_frac": 0.93,
-                 "description": "WPPS balanced — best perf/W for mixed fleets"},
-    "inference": {"power_frac": 0.75, "perf_frac": 0.88,
-                  "description": "WPPS inference — memory-bound decode, lower clocks"},
-    "max-q": {"power_frac": 0.68, "perf_frac": 0.82,
-              "description": "Maximum efficiency — lowest power per token"},
+    name: {"power_frac": round(pm.gpu_power_frac(pm.PROFILE_RACK_FRAC[name]), 4),
+           "perf_frac": perf, "description": text,
+           "rack_kw": round(pm.RACK_MAXP_KW * pm.PROFILE_RACK_FRAC[name], 1)}
+    for name, (perf, text) in _PROFILE_TEXT.items()
 }
 # workload class → average utilisation and transient peak factor
 WORKLOADS = {
@@ -81,8 +86,7 @@ def _bounded_kw(v, name: str, allow_zero: bool = False) -> float:
 
 
 def rack_peak_kw(n_gpu: int, profile: str = "max-p") -> float:
-    return n_gpu * GPU_TDP_W * PROFILES[profile]["power_frac"] / 1000.0 \
-        + RACK_OVERHEAD_KW
+    return pm.rack_kw(n_gpu, PROFILES[profile]["power_frac"])
 
 
 def _demand_kw(n_gpu: int, profile: str, util: float) -> float:
@@ -110,20 +114,30 @@ class _Dps:
         self.seed_gen = cur
         self.domains, self.groups, self.flex = {}, {}, {}
         self.rack_profile, self.manual_cap, self.tray_limit_w = {}, {}, {}
-        sites: Dict[str, dict] = {}
+        blocks: Dict[str, dict] = {}
         for r in STORE.racks.values():
-            s = sites.setdefault(r.site_id, {"name": r.site, "sus": {}})
-            s["sus"].setdefault(r.su_id, []).append(r.rack_id)
-        for site_id, s in sites.items():
-            did = f"pd-{site_id}"
-            racks = [rid for su in s["sus"].values() for rid in su]
-            peak = sum(rack_peak_kw(self.n_gpu(rid)) for rid in racks)
+            bid = r.block_id or r.site_id
+            b = blocks.setdefault(bid, {"site": r.site_id, "site_name": r.site,
+                                        "sus": {}})
+            b["sus"].setdefault(r.su_id, []).append(r.rack_id)
+        meta = {b["id"]: b for b in COMPUTE_BLOCKS}
+        for bid, b in blocks.items():
+            did = f"pd-{bid}"
+            racks = [rid for su in b["sus"].values() for rid in su]
+            m = meta.get(bid)
+            if m:       # OperatingLimit = the ComputeBlock's contracted budget
+                limit, name, power_mw = m["power_mw"] * 1000.0, m["name"], m["power_mw"]
+            else:       # unknown block: 80% of nameplate (legacy behaviour)
+                limit = round(sum(rack_peak_kw(self.n_gpu(rid)) for rid in racks)
+                              * 0.80, 1)
+                name, power_mw = bid, None
             self.domains[did] = {
-                "id": did, "name": f"{s['name']} facility feed", "site": site_id,
-                "operating_limit_kw": round(peak * 0.80, 1),   # 80% of nameplate
+                "id": did, "name": f"{b['site_name']} {name}", "site": b["site"],
+                "compute_block": bid, "power_mw": power_mw,
+                "operating_limit_kw": limit,
                 "mode": "static", "smoothing": False,
                 "created_at": _iso(), "updated_at": _iso()}
-            for su_id, rids in s["sus"].items():
+            for su_id, rids in b["sus"].items():
                 gid = f"rg-{su_id}"
                 self.groups[gid] = {"id": gid, "domain": did, "name": su_id,
                                     "racks": list(rids), "priority": 50,
@@ -359,8 +373,8 @@ def tray_power(tray_id: str, rack_rec: Optional[dict] = None) -> dict:
     measured_w = min(demand_w, cap_w)
     return {"demand_w": round(demand_w, 1), "cap_w": round(cap_w, 1),
             "measured_w": round(measured_w, 1), "tray_limit_w": lim,
-            "gpu_cap_w": round(cap_w / max(1, t.gpus) * 0.88, 1),
-            "gpu_measured_w": round(measured_w / max(1, t.gpus) * 0.88, 1)}
+            "gpu_cap_w": round(cap_w * pm.GPU_POWER_SHARE / max(1, t.gpus), 1),
+            "gpu_measured_w": round(measured_w * pm.GPU_POWER_SHARE / max(1, t.gpus), 1)}
 
 
 # ── views ─────────────────────────────────────────────────────────────

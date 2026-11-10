@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Any
 COMPUTE_TRAYS = 18          # per rack — NVL72: 18 compute trays × 4 Rubin GPU = 72 GPU
 GPU_PER_TRAY = 4
 NVLINK_SWITCH_TRAYS = 9
-POWER_SHELVES = 6
+POWER_SHELVES = 4           # 4 × 110 kW power shelves (NOCP spec vr-nvl72, see power_model)
 CDU_COUNT = 1
 
 # ── Cluster topology — mirrors the NeoCloud OS (NOCP) Phase-1 fleet ────
@@ -29,6 +29,20 @@ CLUSTER = [
      "sus": [("su-4", 16), ("su-5", 16), ("su-6", 16), ("su-7", 6),
              ("su-8", 16), ("su-9", 16), ("su-10", 16), ("su-11", 2)]}, # 104 racks
 ]
+# NOCP ComputeBlocks (floors) — ids, budgets and SU membership mirror NOCP
+# app/seed.py PHASE1_SITES (block id = f"{factory_id}-f{floor_no}"). Each block
+# is one DPS PowerDomain with OperatingLimit = power_mw × 1000.
+COMPUTE_BLOCKS = [
+    {"id": "aif-stt-gasan-f1", "site_id": "gasan", "name": "1층 · 6MW",
+     "power_mw": 6.0, "sus": ["su-1", "su-2"]},                         # 24 racks
+    {"id": "aif-stt-gasan-f2", "site_id": "gasan", "name": "2층 · 3MW",
+     "power_mw": 3.0, "sus": ["su-3"]},                                 # 12 racks
+    {"id": "aif-igis-ansan-f1", "site_id": "ansan", "name": "1층 · 12.9MW",
+     "power_mw": 12.9, "sus": ["su-4", "su-5", "su-6", "su-7"]},        # 54 racks
+    {"id": "aif-igis-ansan-f2", "site_id": "ansan", "name": "2층 · 10.4MW",
+     "power_mw": 10.4, "sus": ["su-8", "su-9", "su-10", "su-11"]},      # 50 racks
+]
+SU_BLOCK = {su: b["id"] for b in COMPUTE_BLOCKS for su in b["sus"]}
 # Optional dev cap: NICO_RACKS_LIMIT=N seeds only the first N racks (faster tests).
 # Read at seed() time so test fixtures can cap the cluster before a reset.
 def _rack_limit() -> int:
@@ -132,6 +146,7 @@ class Rack:
     su_id: str
     site: str                             # site display name
     site_id: str
+    block_id: str = ""                    # NOCP ComputeBlock (floor)
     model: str = "Vera Rubin NVL72"
     trays: List[str] = field(default_factory=list)   # tray_ids
     dpus: List[str] = field(default_factory=list)     # dpu_ids
@@ -190,7 +205,8 @@ class Store:
                             break
                         rack_id = f"{su_id}-rack-{r:02d}"
                         rack = Rack(rack_id=rack_id, su_id=su_id,
-                                    site=site["name"], site_id=site["id"])
+                                    site=site["name"], site_id=site["id"],
+                                    block_id=SU_BLOCK.get(su_id, ""))
                         oct3 = n_racks % 250
                         for t in range(COMPUTE_TRAYS):
                             tid = f"{rack_id}-tray-{t:02d}"
@@ -245,7 +261,8 @@ class Store:
                 tenants.update(f.tenant_id for f in d.functions.values()
                                if f.tenant_id)
         return {"rack_id": rack.rack_id, "su_id": rack.su_id,
-                "site": rack.site, "site_id": rack.site_id, "model": rack.model,
+                "site": rack.site, "site_id": rack.site_id,
+                "compute_block": rack.block_id, "model": rack.model,
                 "trays": len(rack.trays), "gpus": len(rack.trays) * GPU_PER_TRAY,
                 "dpus": len(rack.dpus), "power": pw, "health": health,
                 "tenants": sorted(tenants),
