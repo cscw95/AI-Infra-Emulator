@@ -1,16 +1,18 @@
 """Dell AI Factory hardware identity — single source of every OEM string.
 
-The whole AI Infra hardware supply vendor is Dell. Rack, compute/switch
-trays, power shelves, CDU, BMC (iDRAC10), fabric switches and storage carry
-Dell identity; the silicon inside (Rubin GPU, Vera CPU, ConnectX, BlueField,
+Dell supplies compute, power, cooling and switches: rack, compute/switch
+trays, power shelves, CDU, BMC (iDRAC10) and fabric switches carry Dell
+identity. AI storage is VAST Data (VAST Data Platform, app/vast.py), not Dell; the silicon inside (Rubin GPU, Vera CPU, ConnectX, BlueField,
 NVLink switch ASIC) stays NVIDIA and keeps Manufacturer "NVIDIA".
 
 Part names come from /Users/.../neocloud/RESEARCH-DELL.md (2026-11-10):
   VERIFIED   PowerEdge XE9812 (VR NVL72 rack-scale, DLC), iDRAC10 Redfish with
              Manager id iDRAC.Embedded.1, PowerCool CDU C7000, PowerSwitch
              SN5610 (Spectrum-4, 64x800GbE), Quantum-X800 Q3300-LD (Dell
-             resale), PowerScale F910 / OneFS, Integrated Rack Controller +
-             OpenManage Enterprise.
+             resale), Integrated Rack Controller + OpenManage Enterprise.
+  STORAGE    VAST Data Platform (CNode/DNode in CBox/DBox, VAST OS). VAST's KB
+             lists a Dell PowerEdge R6615 GEN1 EBox build (VAST-listed, Dell
+             certification not confirmed) — recorded as server OEM only.
   UNVERIFIED IR9000 as the XE9812 rack, Dell 110 kW power shelf (Dell lists
              the IR7000 PS33 33 kW shelf), Dell resale of Quantum-X800 Q3400,
              iDRAC10 Oem.Dell field names (iDRAC9 conventions used).
@@ -44,8 +46,13 @@ CDU_MODEL = "Dell PowerCool CDU C7000"
 LEAF_MODEL = "SN5610"
 LEAF_PRODUCT = "Dell PowerSwitch SN5610"
 IB_PRODUCT = "NVIDIA Quantum-X800 Q3400 (Dell supplied)"
-STORAGE_PRODUCT = "Dell PowerScale F910"
-STORAGE_OS = "OneFS"
+STORAGE_VENDOR = "VAST Data"        # AI storage is VAST Data, not Dell
+STORAGE_PRODUCT = "VAST Data Platform"
+STORAGE_OS = "VAST OS"
+STORAGE_EBOX_SERVER_OEM = {          # VAST KB "Dell GEN1 EBOX 1U10Drive"
+    "vendor": HW_VENDOR, "model": "PowerEdge R6615",
+    "status": "vast-listed",
+    "source": "https://kb.vastdata.com/docs/dell-gen1-ebox-1u10drive"}
 MGMT = ["Dell Integrated Rack Controller (IRC)", "Dell OpenManage Enterprise (OME)"]
 
 
@@ -118,9 +125,24 @@ def site_bom_lines() -> list:
               "Spectrum-4, 64x800GbE"),
         _line("infiniband switch", IB_PRODUCT, None, "unverified",
               "Dell resale verified for Q3300-LD only"),
-        _line("storage", f"{STORAGE_PRODUCT} ({STORAGE_OS})", None, "verified",
-              "served at /powerscale/v1 (legacy /vast/v1 kept)"),
+        *storage_bom_lines(),
         _line("management", MGMT[1], None, "verified"),
+    ]
+
+
+def storage_bom_lines() -> list:
+    from . import vast                       # lazy: vast imports nothing from here
+    return [
+        _line("storage cnode enclosure", "VAST CBox (CNode)", vast.CBOXES,
+              "verified", f"{STORAGE_PRODUCT} DASE, {STORAGE_OS}; per site",
+              vendor=STORAGE_VENDOR),
+        _line("storage dnode enclosure", "VAST DBox (DNode, SCM+QLC)",
+              vast.DBOXES, "verified", "per site; served at /vast/v1",
+              vendor=STORAGE_VENDOR),
+        _line("storage ebox (option)", "VAST EBox", None, "verified",
+              "CNode+DNode in one server; Dell PowerEdge R6615 build listed in "
+              "VAST KB, Dell certification not confirmed",
+              vendor=STORAGE_VENDOR),
     ]
 
 
@@ -128,7 +150,8 @@ def summary() -> dict:
     return {"hw_vendor": HW_VENDOR, "manufacturer": MANUFACTURER,
             "compute": COMPUTE_MODEL, "rack": RACK_MODEL, "bmc": IDRAC_MODEL,
             "cdu": CDU_MODEL, "ethernet": LEAF_PRODUCT, "infiniband": IB_PRODUCT,
-            "storage": STORAGE_PRODUCT, "management": MGMT,
+            "storage": STORAGE_PRODUCT, "storage_vendor": STORAGE_VENDOR,
+            "management": MGMT,
             "silicon_vendor": "NVIDIA"}
 
 

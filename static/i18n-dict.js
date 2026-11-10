@@ -14,10 +14,10 @@ window.NC_I18N = window.NC_I18N || {};
 window.NC_I18N.dict = Object.assign(window.NC_I18N.dict || {}, {
 
   // ── header / sub ──────────────────────────────────────────────────
-  "물리 트윈 · HW: Dell · PowerEdge XE9812 Compute/DCGM · PowerScale Storage · UFM/IB · NetQ/Converged · PowerCool DLC · DPU/BlueField · iDRAC10 Redfish · NICo Emulator(:9000)가 제어":
-    "Physical twin · HW: Dell · PowerEdge XE9812 Compute/DCGM · PowerScale Storage · UFM/IB · NetQ/Converged · PowerCool DLC · DPU/BlueField · iDRAC10 Redfish · controlled by NICo Emulator(:9000)",
-  "물리 규격 기반 트윈: Vera Rubin NVL72(72 Rubin GPU/36 Vera CPU), Dell PowerEdge XE9812 · iDRAC10, Dell PowerCool CDU C7000, Dell PowerScale F910, Quantum-X800 IB, Dell PowerSwitch SN5610 (Spectrum-X), ConnectX-9/BlueField-4. HW vendor: Dell.":
-    "Physical-spec-based twin: Vera Rubin NVL72(72 Rubin GPU/36 Vera CPU), Dell PowerEdge XE9812 · iDRAC10, Dell PowerCool CDU C7000, Dell PowerScale F910, Quantum-X800 IB, Dell PowerSwitch SN5610 (Spectrum-X), ConnectX-9/BlueField-4. HW vendor: Dell.",
+  "물리 트윈 · HW: Dell · PowerEdge XE9812 Compute/DCGM · VAST Storage · UFM/IB · NetQ/Converged · PowerCool DLC · DPU/BlueField · iDRAC10 Redfish · NICo Emulator(:9000)가 제어":
+    "Physical twin · HW: Dell · PowerEdge XE9812 Compute/DCGM · VAST Storage · UFM/IB · NetQ/Converged · PowerCool DLC · DPU/BlueField · iDRAC10 Redfish · controlled by NICo Emulator(:9000)",
+  "물리 규격 기반 트윈: Vera Rubin NVL72(72 Rubin GPU/36 Vera CPU), Dell PowerEdge XE9812 · iDRAC10, Dell PowerCool CDU C7000, VAST Data Platform (DASE), Quantum-X800 IB, Dell PowerSwitch SN5610 (Spectrum-X), ConnectX-9/BlueField-4. HW vendor: Dell, storage: VAST Data.":
+    "Physical-spec-based twin: Vera Rubin NVL72(72 Rubin GPU/36 Vera CPU), Dell PowerEdge XE9812 · iDRAC10, Dell PowerCool CDU C7000, VAST Data Platform (DASE), Quantum-X800 IB, Dell PowerSwitch SN5610 (Spectrum-X), ConnectX-9/BlueField-4. HW vendor: Dell, storage: VAST Data.",
   "한국어": "Korean",
 
   // ── site names (backend-surfaced) ─────────────────────────────────

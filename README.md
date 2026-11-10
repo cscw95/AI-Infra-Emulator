@@ -43,11 +43,11 @@ switch trays, power shelves, CDU).
 | **MaxLPS / DPS** | `/dps/v1/...` | PowerDomain/ResourceGroup, static vs dynamic allocation, WPPS profiles, simulate, DSX Flex |
 | **DSX Exchange** | `/exchange/v1/...` | event bus (SSE) — power, thermal, leak, grid, health |
 
-## Hardware vendor: Dell
+## Hardware vendors: Dell (compute, power, cooling, switches) + VAST Data (storage)
 
-The whole AI Infra hardware supply vendor is **Dell** (Dell AI Factory). Rack,
-trays, power shelves, CDU, BMC, switches and storage carry Dell identity; the
-silicon inside (Rubin GPU, Vera CPU, ConnectX, BlueField, NVLink) stays NVIDIA.
+Compute, power, cooling and switches come from **Dell** (Dell AI Factory). Rack,
+trays, power shelves, CDU, BMC and switches carry Dell identity. AI storage is
+**VAST Data** (VAST Data Platform), not Dell. The silicon inside (Rubin GPU, Vera CPU, ConnectX, BlueField, NVLink) stays NVIDIA.
 All strings live in `app/dell.py`; sources and verification status are in
 `../RESEARCH-DELL.md`.
 
@@ -57,9 +57,10 @@ All strings live in `app/dell.py`; sources and verification status are in
   Tray Managers are **iDRAC10**; per-BMC Dell ids are served as aliases at
   `/redfish/v1/Dell/{tray_id}/Managers/iDRAC.Embedded.1`, `.../Systems/System.Embedded.1`,
   `.../Chassis/System.Embedded.1`. DPU systems/BMCs stay NVIDIA.
-- Storage: canonical API is **Dell PowerScale** at `/powerscale/v1/*`. `/vast/v1/*`
-  and its field names (`cboxes`, `dboxes`, `drr`, `vast-<site>` names) still work and
-  answer with `Deprecation: true` + `Link: rel="successor-version"`.
+- Storage: **VAST Data Platform** at `/vast/v1/*` (DASE: CNode in CBox, DNode in DBox,
+  VAST OS; EBox is the single-server option). Cluster rows carry `vendor: "VAST Data"`,
+  `product`, `os`, `hardware`. VAST's KB lists a Dell PowerEdge R6615 GEN1 EBox build;
+  it is noted in the BOM only, Dell certification is not confirmed.
 - `GET /versions` adds `"hw_vendor": "Dell"`; `GET /emulator/v1/inventory/bom` and
   `/emulator/v1/inventory/bom/{rack_id}` return the bill of materials.
 - Power model unchanged (227 kW MaxP / 187 kW MaxQ, 4 × 110 kW shelves). Dell's only
@@ -68,7 +69,7 @@ All strings live in `app/dell.py`; sources and verification status are in
 
 ### Bill of materials (per rack / per site)
 
-| Item | Dell part | Qty | Status |
+| Item | Part | Qty | Status |
 |---|---|---|---|
 | Rack | Dell IR9000 ORv3 rack | 1 | unverified pairing |
 | Compute tray | PowerEdge XE9812 compute tray (4 Rubin GPU + 2 Vera CPU) | 18 | verified |
@@ -79,7 +80,8 @@ All strings live in `app/dell.py`; sources and verification status are in
 | CDU (per SU) | Dell PowerCool CDU C7000 | site | verified |
 | Ethernet leaf/spine | Dell PowerSwitch SN5610 (Spectrum-4, 64 × 800GbE) | site | verified |
 | InfiniBand | NVIDIA Quantum-X800 Q3400, Dell supplied | site | Dell resale verified for Q3300-LD only |
-| Storage | Dell PowerScale F910 (OneFS) | site | verified |
+| Storage (VAST Data) | VAST CBox (CNode) ×8 + VAST DBox (DNode) ×10, VAST OS | site | VAST Data part |
+| Storage option | VAST EBox (Dell PowerEdge R6615 build in VAST KB) | — | VAST-listed, Dell cert. not confirmed |
 | Management | Dell OpenManage Enterprise | site | verified |
 | GPU / DPU (silicon) | NVIDIA Rubin ×72 / BlueField ×18 | — | NVIDIA |
 

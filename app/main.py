@@ -27,17 +27,6 @@ app = FastAPI(title="AI Infra Emulator", version=__version__,
 # request limits via app.security (all off by default).
 app.add_middleware(security.SecurityMiddleware)
 
-
-@app.middleware("http")
-async def _vast_deprecation(request, call_next):
-    """/vast/v1 is the legacy alias of the Dell PowerScale /powerscale/v1 API."""
-    resp = await call_next(request)
-    path = request.scope.get("path", "")
-    if path.startswith("/vast/v1"):
-        resp.headers["Deprecation"] = "true"
-        resp.headers["Link"] = (f'<{path.replace("/vast/v1", "/powerscale/v1", 1)}>'
-                                '; rel="successor-version"')
-    return resp
 security.add_cors(app)
 
 app.include_router(dpu.router)
@@ -49,7 +38,6 @@ app.include_router(observability.router)
 app.include_router(ufm.router)
 app.include_router(netq.router)
 app.include_router(vast.router)
-app.include_router(vast.ps_router)
 app.include_router(dell.router)
 app.include_router(converged.router)
 app.include_router(trayops.router)

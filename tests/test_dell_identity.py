@@ -1,4 +1,4 @@
-"""Dell hardware identity (PowerEdge XE9812 / iDRAC10 / PowerScale) and BOM."""
+"""Dell hardware identity (PowerEdge XE9812 / iDRAC10), VAST Data storage, BOM."""
 from app import dell, power_model as pm
 
 TRAY = "su-1-rack-00-tray-00"
@@ -64,7 +64,7 @@ def test_firmware_inventory_idrac(client):
     assert bmc["Manufacturer"] == "Dell Inc." and bmc["Version"] == dell.IDRAC_FW
 
 
-def test_cdu_switches_storage_dell(client):
+def test_cdu_switches_dell_storage_vast(client):
     c = client.get("/emulator/v1/obs/dlc/cdus").json()
     cdu = c[0]
     assert cdu["model"] == "Dell PowerCool CDU C7000" and cdu["oem"] == "Dell"
@@ -73,22 +73,20 @@ def test_cdu_switches_storage_dell(client):
     assert sw[0]["vendor"] == "Dell" and sw[0]["product"].startswith("Dell PowerSwitch")
     ib = client.get("/ufm/v1/resources/systems").json()["systems"]
     assert ib[0]["vendor"] == "Dell"
-    ps = client.get("/powerscale/v1/clusters").json()["clusters"][0]
-    assert ps["product"] == "Dell PowerScale F910" and ps["vendor"] == "Dell"
+    st = client.get("/vast/v1/clusters").json()["clusters"][0]
+    assert st["vendor"] == "VAST Data" and st["product"] == "VAST Data Platform"
+    assert st["os"] == "VAST OS" and st["hardware"]["architecture"] == "DASE"
 
 
-def test_vast_alias_kept_and_deprecated(client):
+def test_vast_primary_no_powerscale(client):
     r = client.get("/vast/v1/clusters")
-    assert r.status_code == 200 and r.headers["Deprecation"] == "true"
-    assert "/powerscale/v1/clusters" in r.headers["Link"]
+    assert r.status_code == 200
+    assert "Deprecation" not in r.headers and "Link" not in r.headers
     c = r.json()["clusters"][0]
     for k in ("name", "cboxes", "dboxes", "drr", "used_pb"):
         assert k in c                                   # NOCP consumes these
-    assert c["name"].startswith("vast-")
-    v1 = client.get("/vast/v1/views").json()
-    v2 = client.get("/powerscale/v1/views").json()
-    assert v1["count"] == v2["count"]
-    assert "Deprecation" not in client.get("/powerscale/v1/views").headers
+    assert c["name"].startswith("vast-") and "dell" not in c
+    assert client.get("/powerscale/v1/clusters").status_code == 404
 
 
 def test_bom(client):
@@ -99,6 +97,10 @@ def test_bom(client):
     assert items["gpu"]["vendor"] == "NVIDIA"
     assert items["power shelf"]["qty"] == 4 and items["psu"]["qty"] == 24
     assert {l["status"] for l in b["rack_bom"]} <= {"verified", "unverified"}
+    assert b["storage_vendor"] == "VAST Data"
+    st = [l for l in b["site_bom"] if l["item"].startswith("storage")]
+    assert st and {l["vendor"] for l in st} == {"VAST Data"}
+    assert {l["part"] for l in st} >= {"VAST CBox (CNode)", "VAST DBox (DNode, SCM+QLC)"}
     r = client.get(f"/emulator/v1/inventory/bom/{RACK}").json()
     assert len(r["trays"]) == 18 and r["trays"][0]["idrac"] == "iDRAC.Embedded.1"
     assert r["trays"][0]["service_tag"] == dell.service_tag(r["trays"][0]["tray_id"])

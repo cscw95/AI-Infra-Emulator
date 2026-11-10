@@ -42,10 +42,11 @@ switch trays, power shelves, CDU).
 | **MaxLPS / DPS** | `/dps/v1/...` | PowerDomain/ResourceGroup, static vs dynamic allocation, WPPS profiles, simulate, DSX Flex |
 | **DSX Exchange** | `/exchange/v1/...` | event bus (SSE) — power, thermal, leak, grid, health |
 
-## 하드웨어 공급사: Dell
+## 하드웨어 공급사: Dell(컴퓨트·전력·냉각·스위치) + VAST Data(스토리지)
 
-AI Infra 하드웨어 공급사는 모두 **Dell**(Dell AI Factory)입니다. 랙, 트레이, 전원 선반,
-CDU, BMC, 스위치, 스토리지가 Dell 식별 정보를 가집니다. 내부 실리콘(Rubin GPU, Vera
+컴퓨트, 전력, 냉각, 스위치 공급사는 **Dell**(Dell AI Factory)입니다. 랙, 트레이, 전원 선반,
+CDU, BMC, 스위치가 Dell 식별 정보를 가집니다. AI 스토리지는 Dell이 아니라 **VAST Data**
+(VAST Data Platform)입니다. 내부 실리콘(Rubin GPU, Vera
 CPU, ConnectX, BlueField, NVLink)은 NVIDIA 그대로입니다. 모든 문자열은 `app/dell.py`에
 있고, 출처와 검증 상태는 `../RESEARCH-DELL.md`에 있습니다.
 
@@ -55,9 +56,10 @@ CPU, ConnectX, BlueField, NVLink)은 NVIDIA 그대로입니다. 모든 문자열
   트레이 Manager는 **iDRAC10**이며, Dell 고유 id는 별칭 경로
   `/redfish/v1/Dell/{tray_id}/Managers/iDRAC.Embedded.1`, `.../Systems/System.Embedded.1`,
   `.../Chassis/System.Embedded.1`로 제공합니다. DPU 시스템과 DPU BMC는 NVIDIA입니다.
-- 스토리지: 기준 API는 `/powerscale/v1/*`(**Dell PowerScale**)입니다. `/vast/v1/*`와
-  기존 필드명(`cboxes`, `dboxes`, `drr`, `vast-<site>` 이름)은 계속 동작하며
-  `Deprecation: true`와 `Link: rel="successor-version"` 헤더를 붙여 응답합니다.
+- 스토리지: **VAST Data Platform**이 `/vast/v1/*`에서 동작합니다(DASE: CBox의 CNode,
+  DBox의 DNode, VAST OS; EBox는 단일 서버 옵션). 클러스터 행에 `vendor: "VAST Data"`,
+  `product`, `os`, `hardware`가 들어 있습니다. VAST KB에 Dell PowerEdge R6615 기반 GEN1
+  EBox 구성이 있어 BOM에만 적었습니다. Dell 인증 여부는 확인하지 못했습니다.
 - `GET /versions`에 `"hw_vendor": "Dell"`을 추가했고, `GET /emulator/v1/inventory/bom`과
   `/emulator/v1/inventory/bom/{rack_id}`가 자재 명세(BOM)를 반환합니다.
 - 전력 모델은 바꾸지 않았습니다(MaxP 227 kW / MaxQ 187 kW, 110 kW 선반 4개). Dell이 공개한
@@ -66,7 +68,7 @@ CPU, ConnectX, BlueField, NVLink)은 NVIDIA 그대로입니다. 모든 문자열
 
 ### 자재 명세 (랙당 / 사이트당)
 
-| 항목 | Dell 부품 | 수량 | 상태 |
+| 항목 | 부품 | 수량 | 상태 |
 |---|---|---|---|
 | 랙 | Dell IR9000 ORv3 랙 | 1 | 조합 미검증 |
 | 컴퓨트 트레이 | PowerEdge XE9812 컴퓨트 트레이(Rubin GPU 4 + Vera CPU 2) | 18 | 검증 |
@@ -77,7 +79,8 @@ CPU, ConnectX, BlueField, NVLink)은 NVIDIA 그대로입니다. 모든 문자열
 | CDU(SU당) | Dell PowerCool CDU C7000 | 사이트 | 검증 |
 | 이더넷 leaf/spine | Dell PowerSwitch SN5610(Spectrum-4, 800GbE × 64) | 사이트 | 검증 |
 | InfiniBand | NVIDIA Quantum-X800 Q3400, Dell 공급 | 사이트 | Dell 재판매는 Q3300-LD만 검증 |
-| 스토리지 | Dell PowerScale F910(OneFS) | 사이트 | 검증 |
+| 스토리지(VAST Data) | VAST CBox(CNode) ×8 + VAST DBox(DNode) ×10, VAST OS | 사이트 | VAST Data 부품 |
+| 스토리지 옵션 | VAST EBox(VAST KB의 Dell PowerEdge R6615 구성) | — | VAST 등재, Dell 인증 미확인 |
 | 관리 | Dell OpenManage Enterprise | 사이트 | 검증 |
 | GPU / DPU(실리콘) | NVIDIA Rubin ×72 / BlueField ×18 | — | NVIDIA |
 
