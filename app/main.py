@@ -14,6 +14,7 @@ from . import observability
 from . import trayops
 from . import exchange, dps, oob, redfish_oob
 from . import security
+from . import bringup
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -44,6 +45,8 @@ app.include_router(trayops.router)
 app.include_router(dps.router)
 app.include_router(oob.router)
 app.include_router(exchange.router)
+app.include_router(bringup.cm_router)
+app.include_router(bringup.rms_router)
 
 
 @app.get("/versions")
@@ -152,6 +155,7 @@ def events(limit: int = 50):
 @app.post("/emulator/v1/reset")
 def reset():
     STORE.reset()
+    bringup.reset()
     return {"status": "reset", "compute_trays": len(STORE.trays)}
 
 

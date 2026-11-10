@@ -637,6 +637,24 @@ def firmware_inventory():
 def simple_update(body: dict):
     image = body.get("ImageURI", "")
     targets = body.get("Targets", []) or []
+    if body.get("bundle") is not None:          # F24 nvfwupd-style bundle
+        from . import bringup
+        comps = bringup.bundle_components(body["bundle"])
+        order = bringup.apply_order(comps)
+        version = body["bundle"].get("version")
+        with STORE.lock:
+            STORE.event("info", "NeoCloudEmulator.1.0.FirmwareBundleApplied",
+                        [version or "-", ">".join(order),
+                         ",".join(str(t) for t in targets) or "all"])
+        return {
+            "@odata.type": "#Task.v1_7_0.Task", "Id": "fwbundle-1",
+            "Name": "SimpleUpdate (bundle)", "TaskState": "Completed",
+            "TaskStatus": "OK", "Bundle": version, "Targets": targets,
+            "Oem": {"Nvidia": {"UpdateOrder": order,
+                               "Components": {c: comps[c] for c in order}}},
+            "Messages": [{"MessageId": "Update.1.0.UpdateSuccessful",
+                          "Message": f"Bundle applied in order {' > '.join(order)}."}],
+        }
     with STORE.lock:
         STORE.event("info", "NeoCloudEmulator.1.0.FirmwareUpdateApplied",
                     [image, ",".join(str(t) for t in targets) or "all"])

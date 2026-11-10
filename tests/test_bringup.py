@@ -1,0 +1,99 @@
+"""F23 Config Manager / RMS and F24 firmware bundle (AI-Infra side)."""
+
+NEW = "bu-test-rack-01"
+BUNDLE = {"version": "vr-2026.05",
+          "components": {"gpu": "97.10.2C.00.11", "bmc": "1.4.2", "bf": "3.1.0",
+                         "cx": "40.44.1036", "nvswitch": "2.5.1"}}
+PLAN = [{"a": f"{NEW}-tray-{i:02d}:p0", "b": f"{NEW}-leaf-sw-0:swp{i + 1}"}
+        for i in range(18)]
+
+
+def test_staged_rack_switches_and_ztp(client):
+    r = client.get("/config-manager/v1/switches", params={"rack": NEW}).json()
+    assert r["count"] == 2
+    assert {s["state"] for s in r["switches"]} == {"discovered"}
+    sid = r["switches"][0]["id"]
+    z = client.post(f"/config-manager/v1/switches/{sid}/ztp").json()
+    assert z["state"] == "configured"
+    assert [s["stage"] for s in z["stages"]] == ["dhcp", "download", "render",
+                                                 "apply", "validate"]
+    assert z["mgmt_ip"] and z["config_hash"]
+    bad = client.post(f"/config-manager/v1/switches/{sid}/ztp",
+                      json={"fail": "validate"}).json()
+    assert bad["state"] == "ztp_failed"
+    assert client.post("/config-manager/v1/switches/nope/ztp").status_code == 404
+
+
+def test_fleet_leaves_listed_for_seeded_rack(client):
+    r = client.get("/config-manager/v1/switches", params={"rack": "su-1-rack-00"}).json()
+    assert r["count"] > 0
+    assert all(s["source"] == "fleet" and s["su_id"] == "su-1" for s in r["switches"])
+
+
+def test_lldp_validate_clean_and_miswired(client):
+    ok = client.post("/config-manager/v1/lldp-validate",
+                     json={"rack": NEW, "cable_plan": PLAN}).json()
+    assert ok["ok"] and ok["checked"] == 18 and ok["mismatches"] == []
+    client.post("/config-manager/v1/lldp-faults",
+                json={"rack": NEW, "a": PLAN[3]["a"], "actual_b": f"{NEW}-leaf-sw-0:swp9"})
+    client.post("/config-manager/v1/lldp-faults",
+                json={"rack": NEW, "a": PLAN[5]["a"], "actual_b": None})
+    bad = client.post("/config-manager/v1/lldp-validate",
+                      json={"rack": NEW, "cable_plan": PLAN}).json()
+    assert not bad["ok"] and bad["matched"] == 16
+    kinds = {m["a"]: m["kind"] for m in bad["mismatches"]}
+    assert kinds == {PLAN[3]["a"]: "miswired", PLAN[5]["a"]: "missing"}
+    client.delete("/config-manager/v1/lldp-faults", params={"rack": NEW})
+    assert client.post("/config-manager/v1/lldp-validate",
+                       json={"rack": NEW, "cable_plan": PLAN}).json()["ok"]
+    assert client.post("/config-manager/v1/lldp-validate",
+                       json={"rack": NEW, "cable_plan": [{"a": "x"}]}).status_code == 400
+
+
+def test_rms_power_inventory_firmware(client):
+    inv = client.get(f"/rms/v1/racks/{NEW}/inventory").json()
+    assert inv["source"] == "bringup" and inv["power"] == "Off"
+    assert len(inv["compute_trays"]) == 18 and inv["nvlink_switch_trays"] == 9
+    assert inv["power_shelves"] == 4
+    assert inv["compute_trays"][0]["model"] == "PowerEdge XE9812"
+    # firmware refused while powered off
+    assert client.post(f"/rms/v1/racks/{NEW}/firmware",
+                       json={"bundle": BUNDLE}).status_code == 409
+    assert client.post(f"/rms/v1/racks/{NEW}/power", json={"state": "On"}).status_code == 200
+    assert client.get(f"/rms/v1/racks/{NEW}/inventory").json()["power"] == "On"
+    fw = client.post(f"/rms/v1/racks/{NEW}/firmware", json={"bundle": BUNDLE}).json()
+    assert fw["order"][:3] == ["bmc", "bf", "gpu"]
+    assert fw["firmware"]["gpu"] == "97.10.2C.00.11"
+    assert fw["firmware"]["bmc"] == "1.4.2"
+    assert client.post(f"/rms/v1/racks/{NEW}/power",
+                       json={"state": "warp"}).status_code == 400
+    assert client.post(f"/rms/v1/racks/{NEW}/firmware",
+                       json={"bundle": {"version": "x", "components": {"foo": "1"}}}
+                       ).status_code == 400
+
+
+def test_rms_fleet_rack_inventory(client):
+    inv = client.get("/rms/v1/racks/su-1-rack-00/inventory").json()
+    assert inv["source"] == "fleet" and len(inv["compute_trays"]) == 18
+    r = client.post("/rms/v1/racks/su-1-rack-00/power", json={"state": "Off"})
+    assert r.status_code == 200
+    assert client.get("/rms/v1/racks/su-1-rack-00/inventory").json()["power"] == "Off"
+
+
+def test_simple_update_bundle_and_legacy(client):
+    t = client.post("/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate",
+                    json={"bundle": BUNDLE, "Targets": ["/redfish/v1/Systems/x"]}).json()
+    assert t["TaskState"] == "Completed" and t["Bundle"] == "vr-2026.05"
+    assert t["Oem"]["Nvidia"]["UpdateOrder"][:3] == ["bmc", "bf", "gpu"]
+    legacy = client.post("/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate",
+                         json={"ImageURI": "http://img/fw.bin"}).json()
+    assert legacy["Id"] == "fwupdate-1"
+    assert client.post("/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate",
+                       json={"bundle": "1.0"}).status_code == 400
+
+
+def test_reset_clears_staged(client):
+    client.get(f"/rms/v1/racks/{NEW}/inventory")
+    client.post("/emulator/v1/reset")
+    from app import bringup
+    assert NEW not in bringup.STAGED
