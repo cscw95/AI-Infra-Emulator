@@ -239,6 +239,7 @@ def _manager_view(manager_id: str) -> dict:
         mtype = "BMC"
         name = f"{dell.IDRAC_MODEL} {manager_id}"
         mfr, model = dell.MANUFACTURER, dell.IDRAC_MODEL
+        fw = dell.IDRAC_FW
         oem = {"Nvidia": {"ManagerFor": "ComputeTray",
                           "ComputeTrayId": obj.tray_id},
                "Dell": {"DelliDRACCard": {
@@ -254,6 +255,7 @@ def _manager_view(manager_id: str) -> dict:
         mtype = "BMC"
         name = f"DPU BMC {manager_id}"
         mfr, model = "NVIDIA", "BlueField BMC"
+        fw = "1.4.2"
         oem = {"Nvidia": {"ManagerFor": "DPU", "DpuId": obj.dpu_id,
                           "BmcState": obj.bmc_state,
                           "ArmOsState": obj.arm_os_state}}
@@ -265,7 +267,7 @@ def _manager_view(manager_id: str) -> dict:
         "ManagerType": mtype,
         "Manufacturer": mfr,
         "Model": model,
-        "FirmwareVersion": "1.4.2",
+        "FirmwareVersion": fw,
         "PowerState": "On",
         "Status": {"State": "Enabled", "Health": health},
         "EthernetInterfaces": {"IPv4Address": bmc_ip},
