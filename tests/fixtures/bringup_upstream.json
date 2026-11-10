@@ -1,0 +1,202 @@
+{
+ "_source": "DMTF Redfish UpdateService.v1_17_1.json (BSD-3-Clause) SimpleUpdate parameters; NVIDIA nv-config-manager docs/api-specs/ztp.openapi.json (Apache-2.0) device paths; nv-rms fern/proto/rack_manager.proto (Apache-2.0) field names",
+ "simple_update_parameters": {
+  "ExcludeTargets": {
+   "description": "An array of URIs that indicate where not to apply the update image.",
+   "format": "uri-reference",
+   "items": {
+    "type": "string"
+   },
+   "longDescription": "This parameter shall contain zero or more URIs that indicate where not to apply the update image.  This parameter shall be ignored if the `Targets` parameter is provided and contains at least one member.  These excluded targets should correspond to software inventory instances or their related items.  If this parameter is not present or contains no targets, the service shall apply the software image to all applicable targets, as determined by the service.  If an excluded target specifies a device resource, the software image file shall not be applied to that specified device.  If an excluded target specifies a resource collection, the software image shall not be applied to each applicable member of the specified collection.  If an excluded target resource specifies an `Aggregate` resource, the software image file shall not be applied to each applicable element of the specified aggregate.  If an excluded target resource specifies a `ComputerSystem` resource, the software image file shall not be applied to the applicable components within the specified computer system.",
+   "type": "array",
+   "versionAdded": "v1_17_0"
+  },
+  "ForceUpdate": {
+   "description": "An indication of whether the service should bypass update policies when applying the provided image.  The default is `false`.",
+   "longDescription": "This parameter shall indicate whether the service should bypass update policies when applying the provided image, such as allowing a component to be downgraded.  Services may contain update policies that are never bypassed, such as minimum version enforcement.  If the client does not provide this parameter, the service shall default this value to `false`.",
+   "type": "boolean",
+   "versionAdded": "v1_11_0"
+  },
+  "ImageURI": {
+   "description": "The URI of the software image to install.",
+   "format": "uri-reference",
+   "longDescription": "This parameter shall contain an RFC3986-defined URI that links to a software image that the update service retrieves to install software in that image.  The software image may contain multiple images if supported by the image format.  This URI should contain a scheme that describes the transfer protocol.  If the `TransferProtocol` parameter is absent or not supported, and a transfer protocol is not specified by a scheme contained within this URI, the service shall use HTTP to get the image.",
+   "requiredParameter": true,
+   "type": "string"
+  },
+  "LocalImage": {
+   "description": "An indication of whether the service adds the image to the local image store.",
+   "longDescription": "This parameter shall indicate whether the service adds the image to the resource collection referenced by the `LocalImageStore` property.  If the client does not provide this parameter, the service shall default this value to `false`.",
+   "type": "boolean",
+   "versionAdded": "v1_17_0"
+  },
+  "Password": {
+   "description": "The password to access the URI specified by the `ImageURI` parameter.",
+   "longDescription": "This parameter shall contain the password to access the URI specified by the `ImageURI` parameter.",
+   "type": "string",
+   "versionAdded": "v1_4_0"
+  },
+  "Stage": {
+   "description": "An indication of whether the service stages the image on target devices for a client to activate at a later time.",
+   "longDescription": "This parameter shall indicate whether the service stages the image on target devices for a client to activate at a later time with the `Activate` action on the `SoftwareInventory` resource.  If the client does not provide this parameter, the service shall default this value to `false`.",
+   "type": "boolean",
+   "versionAdded": "v1_16_0"
+  },
+  "Targets": {
+   "description": "An array of URIs that indicate where to apply the update image.",
+   "format": "uri-reference",
+   "items": {
+    "type": "string"
+   },
+   "longDescription": "This parameter shall contain zero or more URIs that indicate where to apply the update image.  These targets should correspond to software inventory instances or their related items.  If this parameter is not present or contains no targets, the service shall apply the software image to all applicable targets, as determined by the service.  If the target specifies a device resource, the software image file shall be applied to the specified device.  If the target specifies a resource collection, the software image shall be applied to each applicable member of the specified collection.  If the target resource specifies an `Aggregate` resource, the software image file shall be applied to each applicable element of the specified aggregate.  If the target resource specifies a `ComputerSystem` resource, the software image file shall be applied to the applicable components within the specified computer system.  If the provided software image is a bundle of multiple images, the service shall apply each software image as specified by this parameter.",
+   "type": "array",
+   "versionAdded": "v1_2_0"
+  },
+  "TransferProtocol": {
+   "$ref": "#/definitions/TransferProtocolType",
+   "description": "The network protocol that the update service uses to retrieve the software image file located at the URI specified by the `ImageURI` parameter.  This parameter is ignored if the URI provided in `ImageURI` contains a scheme.",
+   "longDescription": "This parameter shall contain the network protocol that the update service shall use to retrieve the software image located at the URI specified by the `ImageURI` parameter.  Services should ignore this parameter if the URI specified by the `ImageURI` parameter contains a scheme.  If this parameter is not provided (or supported), and a transfer protocol is not specified by a scheme contained within this URI, the service shall use HTTP to retrieve the image."
+  },
+  "Username": {
+   "description": "The username to access the URI specified by the `ImageURI` parameter.",
+   "longDescription": "This parameter shall contain the username to access the URI specified by the `ImageURI` parameter.",
+   "type": "string",
+   "versionAdded": "v1_4_0"
+  }
+ },
+ "ztp_paths": {
+  "/v1/device/{device_uuid}/boot-script": {
+   "get": {
+    "responses": {
+     "200": [
+      "text/plain"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/config/{configlet}": {
+   "get": {
+    "responses": {
+     "200": [
+      "text/plain"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/firmware": {
+   "get": {
+    "responses": {
+     "200": [],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/firmware/checksum": {
+   "get": {
+    "responses": {
+     "200": [
+      "application/json"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/onie": {
+   "get": {
+    "responses": {
+     "200": [
+      "text/plain"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/provisioned": {
+   "post": {
+    "responses": {
+     "200": [
+      "application/json"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  },
+  "/v1/device/{device_uuid}/validate_serial": {
+   "post": {
+    "responses": {
+     "200": [
+      "application/json"
+     ],
+     "404": [],
+     "422": [
+      "application/json"
+     ]
+    }
+   }
+  }
+ },
+ "ValidateSerialBody": {
+  "description": "Request body for serial number validation.",
+  "properties": {
+   "serial": {
+    "title": "Serial",
+    "type": "string"
+   }
+  },
+  "required": [
+   "serial"
+  ],
+  "title": "ValidateSerialBody",
+  "type": "object"
+ },
+ "rms": {
+  "SetPowerStateRequest": [
+   "node_id",
+   "operation",
+   "rack_id"
+  ],
+  "SetPowerStateResponse": [
+   "status"
+  ],
+  "UpdateFirmwareRequest": [
+   "node_id",
+   "filename",
+   "target",
+   "activate",
+   "rack_id",
+   "firmware_targets",
+   "force_update"
+  ],
+  "UpdateFirmwareResponse": [
+   "status",
+   "message",
+   "error_code",
+   "job_id"
+  ],
+  "ReturnCode": [
+   "RETURN_CODE_UNSPECIFIED",
+   "RETURN_CODE_SUCCESS",
+   "RETURN_CODE_FAILURE"
+  ]
+ }
+}

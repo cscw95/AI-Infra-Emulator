@@ -637,6 +637,30 @@ def firmware_inventory():
 def simple_update(body: dict):
     image = body.get("ImageURI", "")
     targets = body.get("Targets", []) or []
+    # F24 nvfwupd-style bundle: DMTF UpdateService.v1_17_1 SimpleUpdate has no
+    # bundle parameter, so it rides in Oem.Nvidia.Bundle (ImageURI names the
+    # package); the v2 contract's top-level "bundle" is accepted as an alias.
+    bundle = body.get("bundle")
+    if bundle is None:
+        bundle = ((body.get("Oem") or {}).get("Nvidia") or {}).get("Bundle")
+    if bundle is not None:
+        from . import bringup
+        comps = bringup.bundle_components(bundle)
+        order = bringup.apply_order(comps)
+        version = bundle.get("version")
+        with STORE.lock:
+            STORE.event("info", "NeoCloudEmulator.1.0.FirmwareBundleApplied",
+                        [version or "-", ">".join(order),
+                         ",".join(str(t) for t in targets) or "all"])
+        return {
+            "@odata.type": "#Task.v1_7_0.Task", "Id": "fwbundle-1",
+            "Name": "SimpleUpdate (bundle)", "TaskState": "Completed",
+            "TaskStatus": "OK", "Bundle": version, "ImageURI": image, "Targets": targets,
+            "Oem": {"Nvidia": {"UpdateOrder": order,
+                               "Components": {c: comps[c] for c in order}}},
+            "Messages": [{"MessageId": "Update.1.0.UpdateSuccessful",
+                          "Message": f"Bundle applied in order {' > '.join(order)}."}],
+        }
     with STORE.lock:
         STORE.event("info", "NeoCloudEmulator.1.0.FirmwareUpdateApplied",
                     [image, ",".join(str(t) for t in targets) or "all"])

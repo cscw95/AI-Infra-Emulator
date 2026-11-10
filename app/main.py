@@ -16,6 +16,7 @@ from . import exchange, dps, oob, redfish_oob
 from . import security
 from . import dynamo, dynamo_frontend, gpufaults
 from . import flex
+from . import bringup
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -52,6 +53,9 @@ app.include_router(dynamo_frontend.router)
 app.include_router(dynamo.kvbm.router)
 app.include_router(gpufaults.router)
 app.include_router(flex.router)
+app.include_router(bringup.cm_router)
+app.include_router(bringup.rms_router)
+app.include_router(bringup.ztp_router)
 
 
 @app.get("/versions")
@@ -160,6 +164,7 @@ def events(limit: int = 50):
 @app.post("/emulator/v1/reset")
 def reset():
     STORE.reset()
+    bringup.reset()
     return {"status": "reset", "compute_trays": len(STORE.trays)}
 
 
