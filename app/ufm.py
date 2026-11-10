@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from .store import STORE, CLUSTER, _iso
 from . import fabric as _fabric
+from . import dell
 
 router = APIRouter(prefix="/ufm/v1", tags=["ufm"])
 
@@ -153,6 +154,8 @@ class UfmEngine:
         g = _guid(name)
         sw = {"guid": g, "name": name, "type": typ, "plane": plane.upper(),
               "site": sid, "su_id": su_id, "model": MODEL, "fw": FW_VERSION,
+              "vendor": dell.HW_VENDOR, "product": dell.IB_PRODUCT,
+              "service_tag": dell.service_tag(name),
               "ports_total": PORTS_TOTAL, "ports_active": 0,
               "temperature_c": 42.0 + (_crc(name) % 60) / 10.0,  # Assumption
               "state": "ok", "fault": None}

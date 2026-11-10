@@ -316,7 +316,7 @@
 <header>
   <div>
     <div class="title">AI Infra Emulator <span class="accent">— Vera Rubin NVL72 Digital Twin</span></div>
-    <div class="sub" id="sub">물리 트윈 · Compute/DCGM · VAST Storage · UFM/IB · NetQ/Converged · SMCI DLC · DPU/BlueField · Redfish BMC · NICo Emulator(:9000)가 제어</div>
+    <div class="sub" id="sub">물리 트윈 · HW: Dell · PowerEdge XE9812 Compute/DCGM · PowerScale Storage · UFM/IB · NetQ/Converged · PowerCool DLC · DPU/BlueField · iDRAC10 Redfish · NICo Emulator(:9000)가 제어</div>
   </div>
   <div id="health"><span class="pill">connecting…</span></div>
 </header>
@@ -430,7 +430,7 @@
     </div>
     <div class="sub-sec">
       <h2>NetQ — Ethernet <span class="count" id="netq-count">0</span>
-        <span class="hint" id="netq-val">— Spectrum-X SN5600 · NetQ validation</span>
+        <span class="hint" id="netq-val">— Dell PowerSwitch SN5610 (Spectrum-X) · NetQ validation</span>
         <span class="hint">· 행별 장애 주입 — 데모</span>
         <span class="ctl-warn" id="netq-warn"></span></h2>
       <div class="tbl-wrap"><table id="netq-table"></table></div>
@@ -444,10 +444,10 @@
     </div>
   </section>
 
-  <!-- STORAGE (VAST Data) -->
+  <!-- STORAGE (Dell PowerScale; VAST-shaped API) -->
   <section class="view" id="view-storage">
     <div class="sub-sec">
-      <h2>VAST Clusters <span class="count" id="vast-count">0</span>
+      <h2>Dell PowerScale Clusters <span class="count" id="vast-count">0</span>
         <span class="hint">— 사이트별 AI Storage 1식 · DASE(CBox/DBox) · VMS 에뮬레이션 · 카드별 장애 주입 — 데모</span>
         <span class="ctl-warn" id="vast-warn"></span></h2>
       <div class="instances" id="vast-clusters"></div>
@@ -1402,10 +1402,10 @@ async function loadStorage(){
     : s==="DEGRADED"||s==="degraded" ? "warn" : "crit";
   try{
     const [cl, vw, pf, al] = await Promise.all([
-      getJSON("/vast/v1/clusters"),
-      getJSON("/vast/v1/views"),
-      getJSON("/vast/v1/performance"),
-      getJSON("/vast/v1/alarms"),
+      getJSON("/powerscale/v1/clusters"),
+      getJSON("/powerscale/v1/views"),
+      getJSON("/powerscale/v1/performance"),
+      getJSON("/powerscale/v1/alarms"),
     ]);
     const clusters = cl.clusters||[];
     $("vast-count").textContent = clusters.length;
@@ -1417,7 +1417,7 @@ async function loadStorage(){
         <div class="ihead">
           <div>
             <div class="iid">${esc(c.name)}</div>
-            <div class="isite">${esc(c.site_name)} <span class="rgn">· VAST ${esc(c.version)} · DASE</span></div>
+            <div class="isite">${esc(c.site_name)} <span class="rgn">· ${esc(c.product||"PowerScale")} · ${esc(c.os||"OneFS")}</span></div>
           </div>
           <span class="badge ${stCls(c.state)}">${esc(c.state)}</span>
         </div>
@@ -1446,7 +1446,7 @@ async function loadStorage(){
           <span class="hint">장애 주입 — 데모</span>
         </div>
       </div>`;
-    }).join("") || `<div class="hint">no VAST clusters</div>`;
+    }).join("") || `<div class="hint">no PowerScale clusters</div>`;
     wireFaultBtns("#vast-clusters","vast-warn",()=>loadStorage());
 
     const views = vw.views||[];

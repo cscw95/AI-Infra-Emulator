@@ -1,4 +1,10 @@
-"""VAST Data VMS emulator — emulates each site's AI Storage (one VAST cluster)
+"""AI Storage emulator — presented as Dell PowerScale (F910 / OneFS) at
+/powerscale/v1. The VAST Data VMS shape below is kept: /vast/v1 paths and field
+names (cboxes/dboxes/drr/view_path, cluster names vast-<site>) still work as
+deprecated aliases (Deprecation header) because NOCP vast_fake/adapters/oob
+consume them. Each cluster row also carries a Dell identity block.
+
+Original model: VAST Data VMS emulator — emulates each site's AI Storage (one VAST cluster)
 at the VMS (VAST Management System) conceptual-model level (prefix /vast/v1).
 
 The resource axes follow VAST VMS REST API's public collections (views /
@@ -35,6 +41,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .store import STORE, CLUSTER, GPU_PER_TRAY, _iso
+from . import dell
 
 router = APIRouter(prefix="/vast/v1", tags=["vast"])
 
@@ -306,6 +313,12 @@ class VastEngine:
             "drr": c["drr"], "version": c["version"],
             "failed_drives": c["failed_drives"],
             "fault": c["fault"],
+            "vendor": dell.HW_VENDOR, "product": dell.STORAGE_PRODUCT,
+            "os": dell.STORAGE_OS, "service_tag": dell.service_tag(c["name"]),
+            "dell": {"product": dell.STORAGE_PRODUCT, "os": dell.STORAGE_OS,
+                     "api": "/powerscale/v1",
+                     "deprecated_fields": ["cboxes", "dboxes", "cboxes_active",
+                                           "drr"]},
         }
 
     # ── tick — alarm evaluation (TICK_SEC cache) ──────────────────────────────
@@ -485,3 +498,11 @@ def recover(body: FaultRecover = FaultRecover()):
         return {"recovered": cleared,
                 "clusters": [ENGINE.cluster_view(c, views)
                              for c in ENGINE.clusters.values()]}
+
+
+# ── Dell PowerScale prefix — same handlers, canonical path ───────────────────
+ps_router = APIRouter(prefix="/powerscale/v1", tags=["powerscale"])
+for _r in list(router.routes):
+    ps_router.add_api_route(_r.path[len(router.prefix):], _r.endpoint,
+                            methods=list(_r.methods), status_code=_r.status_code,
+                            response_model=_r.response_model)

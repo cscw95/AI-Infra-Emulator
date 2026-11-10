@@ -87,7 +87,7 @@ def test_racks_and_cdu_physical_consistency(client):
     # delta_t = return - supply
     sec = c1["secondary"]
     assert abs(sec["delta_t"] - (sec["return_c"] - sec["supply_c"])) < 0.2
-    assert c1["oem"] == "Supermicro" and c1["type"] == "in-row-dlc2"
+    assert c1["oem"] == "Dell" and c1["type"] == "in-row-dlc2"
     assert c1["rated_capacity_kw"] == 4000.0
     assert len(c1["pumps"]) == 2
     # detail: branch = 1 per rack (CDM), includes the leak sensor

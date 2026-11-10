@@ -42,6 +42,45 @@ switch trays, power shelves, CDU).
 | **MaxLPS / DPS** | `/dps/v1/...` | PowerDomain/ResourceGroup, static vs dynamic allocation, WPPS profiles, simulate, DSX Flex |
 | **DSX Exchange** | `/exchange/v1/...` | event bus (SSE) — power, thermal, leak, grid, health |
 
+## 하드웨어 공급사: Dell
+
+AI Infra 하드웨어 공급사는 모두 **Dell**(Dell AI Factory)입니다. 랙, 트레이, 전원 선반,
+CDU, BMC, 스위치, 스토리지가 Dell 식별 정보를 가집니다. 내부 실리콘(Rubin GPU, Vera
+CPU, ConnectX, BlueField, NVLink)은 NVIDIA 그대로입니다. 모든 문자열은 `app/dell.py`에
+있고, 출처와 검증 상태는 `../RESEARCH-DELL.md`에 있습니다.
+
+- Redfish: 컴퓨트 트레이의 System/Chassis와 랙 Chassis가 `Manufacturer: "Dell Inc."`,
+  `Model`, `SKU`(7자리 Service Tag), `SerialNumber`, `PartNumber`, `Oem.Dell` 블록
+  (`DellSystem`, `DelliDRACCard`)을 반환합니다. NICo/NOCP용 `Oem.Nvidia`는 유지합니다.
+  트레이 Manager는 **iDRAC10**이며, Dell 고유 id는 별칭 경로
+  `/redfish/v1/Dell/{tray_id}/Managers/iDRAC.Embedded.1`, `.../Systems/System.Embedded.1`,
+  `.../Chassis/System.Embedded.1`로 제공합니다. DPU 시스템과 DPU BMC는 NVIDIA입니다.
+- 스토리지: 기준 API는 `/powerscale/v1/*`(**Dell PowerScale**)입니다. `/vast/v1/*`와
+  기존 필드명(`cboxes`, `dboxes`, `drr`, `vast-<site>` 이름)은 계속 동작하며
+  `Deprecation: true`와 `Link: rel="successor-version"` 헤더를 붙여 응답합니다.
+- `GET /versions`에 `"hw_vendor": "Dell"`을 추가했고, `GET /emulator/v1/inventory/bom`과
+  `/emulator/v1/inventory/bom/{rack_id}`가 자재 명세(BOM)를 반환합니다.
+- 전력 모델은 바꾸지 않았습니다(MaxP 227 kW / MaxQ 187 kW, 110 kW 선반 4개). Dell이 공개한
+  VR 수치는 "랙당 235 kW"(2026년 5월 발언) 하나뿐입니다. 110 kW 선반은 모델 정격값이며 Dell
+  공개 부품이 아닙니다(Dell 공개 부품은 IR7000 PS33, 5.5 kW × 6).
+
+### 자재 명세 (랙당 / 사이트당)
+
+| 항목 | Dell 부품 | 수량 | 상태 |
+|---|---|---|---|
+| 랙 | Dell IR9000 ORv3 랙 | 1 | 조합 미검증 |
+| 컴퓨트 트레이 | PowerEdge XE9812 컴퓨트 트레이(Rubin GPU 4 + Vera CPU 2) | 18 | 검증 |
+| NVLink 스위치 트레이 | PowerEdge XE9812 NVLink 스위치 트레이 | 9 | 이름 미검증 |
+| 전원 선반 / PSU | Dell ORv3 전원 선반 110 kW / PSU 18.3 kW | 4 / 24 | 모델 정격, 미검증 |
+| BMC | iDRAC10 (`iDRAC.Embedded.1`) | 18 | 검증 |
+| 랙 컨트롤러 | Dell Integrated Rack Controller(IRC) | 1 | 검증 |
+| CDU(SU당) | Dell PowerCool CDU C7000 | 사이트 | 검증 |
+| 이더넷 leaf/spine | Dell PowerSwitch SN5610(Spectrum-4, 800GbE × 64) | 사이트 | 검증 |
+| InfiniBand | NVIDIA Quantum-X800 Q3400, Dell 공급 | 사이트 | Dell 재판매는 Q3300-LD만 검증 |
+| 스토리지 | Dell PowerScale F910(OneFS) | 사이트 | 검증 |
+| 관리 | Dell OpenManage Enterprise | 사이트 | 검증 |
+| GPU / DPU(실리콘) | NVIDIA Rubin ×72 / BlueField ×18 | — | NVIDIA |
+
 ## DSX OS baseline (v0.2.0)
 
 This emulator tracks the **NVIDIA DSX OS (2026.05)** layering: it is the physical /
@@ -61,7 +100,7 @@ NeoCloud repos):
 ### New endpoints
 
 Chassis `{id}` is a compute tray (`su-1-rack-00-tray-00`) or a rack (`su-1-rack-00`).
-Trays share the rack's power-shelf busbar (6 shelves × 6 Delta 5.5 kW PSUs).
+Trays share the rack's power-shelf busbar (4 Dell ORv3 shelves × 6 PSUs, 110 kW per shelf model rating).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -159,7 +198,7 @@ cd ~/nocp && PYTHONPATH=. .venv/bin/python scripts/integrate_emulator.py   # 7 P
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 82 passed
+.venv/bin/python -m pytest tests/ -q      # 126 passed
 ```
 
 ## Layout
@@ -175,6 +214,7 @@ app/exchange.py      DSX Exchange event bus (SSE, listeners)
 app/dps.py           DPS / MaxLPS power domains, allocation, simulate, Flex
 app/oob.py           OOB state (BMC, PSU, leak, inlet, SEL) + /emulator/v1/oob
 app/redfish_oob.py   Redfish PowerSubsystem/ThermalSubsystem/SEL/PowerLimit/resets
+app/dell.py          Dell hardware identity, BOM, iDRAC alias routes
 app/main.py          FastAPI app (CORS for :8000/:8090) + dashboard + /metrics
 static/index.html    single-page dashboard
 tests/               pytest suite

@@ -18,6 +18,7 @@ from .store import STORE, _iso
 from . import models as m
 from . import exchange
 from . import security
+from . import dell
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish"])
 
@@ -134,8 +135,7 @@ def _system_view(tray) -> dict:
         "Id": tray.tray_id,
         "Name": f"Rubin Compute Tray {tray.tray_id}",
         "SystemType": "Physical",
-        "Manufacturer": "NVIDIA",
-        "Model": "Vera Rubin NVL72 Compute Tray",
+        **dell.identity(tray.tray_id, dell.COMPUTE_MODEL, "tray"),
         "PowerState": ps,
         "ProcessorSummary": {"Count": tray.gpus, "Model": "NVIDIA Rubin",
                              "Status": {"State": "Enabled",
@@ -173,7 +173,9 @@ def _system_view(tray) -> dict:
             "LifecycleState": tray.lifecycle_state,
             "BootStage": tray.boot_stage,
             "BmcIp": tray.bmc_ip,
-        }},
+        },
+            "Dell": dell.oem_dell_system(tray.tray_id, dell.COMPUTE_MODEL,
+                                         "ComputeTray")},
     }
 
 
@@ -235,15 +237,23 @@ def _manager_view(manager_id: str) -> dict:
         bmc_ip = obj.bmc_ip
         managed = {"@odata.id": f"/redfish/v1/Systems/{obj.tray_id}"}
         mtype = "BMC"
-        name = f"Host BMC {manager_id}"
+        name = f"{dell.IDRAC_MODEL} {manager_id}"
+        mfr, model = dell.MANUFACTURER, dell.IDRAC_MODEL
         oem = {"Nvidia": {"ManagerFor": "ComputeTray",
-                          "ComputeTrayId": obj.tray_id}}
+                          "ComputeTrayId": obj.tray_id},
+               "Dell": {"DelliDRACCard": {
+                   "IDRACId": dell.IDRAC_MANAGER_ID,
+                   "URLString": f"https://{bmc_ip}",
+                   "ServiceTag": dell.service_tag(obj.tray_id),
+                   "AliasUri": f"/redfish/v1/Dell/{obj.tray_id}"
+                               f"/Managers/{dell.IDRAC_MANAGER_ID}"}}}
     else:
         health = _rf_health(obj.health)
         bmc_ip = obj.bmc_ip
         managed = {"@odata.id": f"/redfish/v1/Systems/Bluefield/{obj.dpu_id}"}
         mtype = "BMC"
         name = f"DPU BMC {manager_id}"
+        mfr, model = "NVIDIA", "BlueField BMC"
         oem = {"Nvidia": {"ManagerFor": "DPU", "DpuId": obj.dpu_id,
                           "BmcState": obj.bmc_state,
                           "ArmOsState": obj.arm_os_state}}
@@ -253,7 +263,8 @@ def _manager_view(manager_id: str) -> dict:
         "Id": manager_id,
         "Name": name,
         "ManagerType": mtype,
-        "Manufacturer": "NVIDIA",
+        "Manufacturer": mfr,
+        "Model": model,
         "FirmwareVersion": "1.4.2",
         "PowerState": "On",
         "Status": {"State": "Enabled", "Health": health},
@@ -279,6 +290,10 @@ def service_root():
         "Name": "NICo BMC Service Root",
         "RedfishVersion": "1.16.0",
         "Product": "NVIDIA Infra Controller — Vera Rubin NVL72",
+        "Vendor": dell.HW_VENDOR,
+        "Oem": {"Dell": {"HardwareVendor": dell.HW_VENDOR,
+                         "Platform": dell.COMPUTE_MODEL,
+                         "Bom": {"@odata.id": "/emulator/v1/inventory/bom"}}},
         "Systems": {"@odata.id": "/redfish/v1/Systems"},
         "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
         "Managers": {"@odata.id": "/redfish/v1/Managers"},
@@ -414,8 +429,7 @@ def chassis(tray_id: str):
             "Id": tray_id,
             "Name": f"Compute Tray Chassis {tray_id}",
             "ChassisType": "Blade",
-            "Manufacturer": "NVIDIA",
-            "Model": "Vera Rubin NVL72 Compute Tray",
+            **dell.identity(tray_id, dell.COMPUTE_MODEL, "tray"),
             "PowerState": STORE.power_state(tray),
             "Status": {"State": "Enabled", "Health": _rf_health(tray.health)},
             "PowerWatts": watts,
@@ -441,6 +455,8 @@ def chassis(tray_id: str):
                 "ManagedBy": [{"@odata.id":
                     f"/redfish/v1/Managers/{tray_id}"}],
             },
+            "Oem": {"Dell": dell.oem_dell_system(tray_id, dell.COMPUTE_MODEL,
+                                                 "ComputeTray")},
         }
 
 
@@ -564,8 +580,8 @@ def update_service():
 
 
 _FW_VERSIONS = {
-    "BMC": ("1.4.2", "NVIDIA"),
-    "BIOS": ("U-Boot-2024.01-rubin", "NVIDIA"),
+    "BMC": (dell.IDRAC_FW, dell.MANUFACTURER),   # iDRAC10
+    "BIOS": ("U-Boot-2024.01-rubin", dell.MANUFACTURER),
     "DpuBmc": ("BF-24.10-3", "NVIDIA"),
     "DpuNic": ("24.39.1002", "NVIDIA Mellanox"),
 }

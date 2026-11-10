@@ -17,6 +17,7 @@ from . import dps
 from . import oob, exchange
 from . import power_model as pm
 from . import observability as obs
+from . import dell
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish-oob"])
 
@@ -51,8 +52,8 @@ def rack_chassis_view(rack_id: str) -> dict:
     return {
         "@odata.type": "#Chassis.v1_25_0.Chassis", "@odata.id": base,
         "Id": rack_id, "Name": f"Vera Rubin NVL72 Rack {rack_id}",
-        "ChassisType": "Rack", "Manufacturer": "NVIDIA",
-        "Model": r.model,
+        "ChassisType": "Rack",
+        **dell.identity(rack_id, dell.RACK_MODEL, "rack"),
         "Status": {"State": "Enabled", "Health": _health(
             [ro["leak"], "Critical" if ro["sel_critical"] else "OK",
              "Warning" if ro["psu_ok"] < ro["psu_total"] else "OK"])},
@@ -66,7 +67,10 @@ def rack_chassis_view(rack_id: str) -> dict:
             "ResetType@Redfish.AllowableValues": CHASSIS_RESET_TYPES}},
         "Oem": {"Nvidia": {"SuId": r.su_id, "Site": r.site_id,
                            "PowerShelves": r.power_shelves,
-                           "NvlinkSwitchTrays": r.nvlink_switch_trays}},
+                           "NvlinkSwitchTrays": r.nvlink_switch_trays},
+                "Dell": {**dell.oem_dell_system(rack_id, dell.RACK_MODEL, "Rack"),
+                         "RackController": dell.MGMT[0],
+                         "Platform": dell.COMPUTE_MODEL}},
     }
 
 
@@ -76,7 +80,7 @@ def _psu_view(rack_id: str, cid: str, p: dict) -> dict:
         "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
         "@odata.id": f"/redfish/v1/Chassis/{cid}/PowerSubsystem/PowerSupplies/{p['id']}",
         "Id": p["id"], "Name": f"Power shelf {p['shelf']} {p['id']}",
-        "Manufacturer": "Delta", "Model": "ORv3 5.5kW PSU",
+        **dell.identity(f"{rack_id}-{p['id']}", dell.PSU_MODEL, "psu"),
         "PowerSupplyType": "AC", "PowerCapacityWatts": p["rated_w"],
         "Status": {"State": p["state"], "Health": p["health"]},
         "Metrics": {"OutputPowerWatts": {"Reading": p["output_w"]}},

@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 from .store import STORE, GPU_PER_TRAY, _iso
 from . import power_model as pm
+from . import dell
 
 router = APIRouter(prefix="/emulator/v1/obs", tags=["observability"])
 
@@ -604,8 +605,10 @@ class ObsEngine:
                                  ("leak", "pump_failure")) else
                   "warning" if c.alarms else "ok")
         return {
-            "cdu_id": c.cdu_id, "model": "SMCI LCS-DLC2-1600 (in-row)",
-            "oem": "Supermicro", "type": "in-row-dlc2",
+            "cdu_id": c.cdu_id, "model": dell.CDU_MODEL,
+            "oem": dell.HW_VENDOR, "type": "in-row-dlc2",
+            "manufacturer": dell.MANUFACTURER,
+            "service_tag": dell.service_tag(c.cdu_id),
             "site": c.site, "su_id": c.su_id, "rack_ids": list(c.rack_ids),
             "rated_capacity_kw": CDU_RATED_KW,
             "measured_heat_kw": round(d["heat"], 1),

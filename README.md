@@ -43,6 +43,46 @@ switch trays, power shelves, CDU).
 | **MaxLPS / DPS** | `/dps/v1/...` | PowerDomain/ResourceGroup, static vs dynamic allocation, WPPS profiles, simulate, DSX Flex |
 | **DSX Exchange** | `/exchange/v1/...` | event bus (SSE) — power, thermal, leak, grid, health |
 
+## Hardware vendor: Dell
+
+The whole AI Infra hardware supply vendor is **Dell** (Dell AI Factory). Rack,
+trays, power shelves, CDU, BMC, switches and storage carry Dell identity; the
+silicon inside (Rubin GPU, Vera CPU, ConnectX, BlueField, NVLink) stays NVIDIA.
+All strings live in `app/dell.py`; sources and verification status are in
+`../RESEARCH-DELL.md`.
+
+- Redfish: compute-tray System/Chassis and rack Chassis report `Manufacturer: "Dell Inc."`,
+  `Model`, `SKU` (7-char service tag), `SerialNumber`, `PartNumber` and an `Oem.Dell`
+  block (`DellSystem`, `DelliDRACCard`). `Oem.Nvidia` stays for NICo/NOCP.
+  Tray Managers are **iDRAC10**; per-BMC Dell ids are served as aliases at
+  `/redfish/v1/Dell/{tray_id}/Managers/iDRAC.Embedded.1`, `.../Systems/System.Embedded.1`,
+  `.../Chassis/System.Embedded.1`. DPU systems/BMCs stay NVIDIA.
+- Storage: canonical API is **Dell PowerScale** at `/powerscale/v1/*`. `/vast/v1/*`
+  and its field names (`cboxes`, `dboxes`, `drr`, `vast-<site>` names) still work and
+  answer with `Deprecation: true` + `Link: rel="successor-version"`.
+- `GET /versions` adds `"hw_vendor": "Dell"`; `GET /emulator/v1/inventory/bom` and
+  `/emulator/v1/inventory/bom/{rack_id}` return the bill of materials.
+- Power model unchanged (227 kW MaxP / 187 kW MaxQ, 4 × 110 kW shelves). Dell's only
+  public VR figure is "racks of 235 kW" (spoken, May 2026); the 110 kW shelf is a
+  model rating, not a published Dell part (Dell lists the IR7000 PS33, 6 × 5.5 kW).
+
+### Bill of materials (per rack / per site)
+
+| Item | Dell part | Qty | Status |
+|---|---|---|---|
+| Rack | Dell IR9000 ORv3 rack | 1 | unverified pairing |
+| Compute tray | PowerEdge XE9812 compute tray (4 Rubin GPU + 2 Vera CPU) | 18 | verified |
+| NVLink switch tray | PowerEdge XE9812 NVLink switch tray | 9 | name unverified |
+| Power shelf / PSU | Dell ORv3 power shelf 110 kW / PSU 18.3 kW | 4 / 24 | model rating, unverified |
+| BMC | iDRAC10 (`iDRAC.Embedded.1`) | 18 | verified |
+| Rack controller | Dell Integrated Rack Controller (IRC) | 1 | verified |
+| CDU (per SU) | Dell PowerCool CDU C7000 | site | verified |
+| Ethernet leaf/spine | Dell PowerSwitch SN5610 (Spectrum-4, 64 × 800GbE) | site | verified |
+| InfiniBand | NVIDIA Quantum-X800 Q3400, Dell supplied | site | Dell resale verified for Q3300-LD only |
+| Storage | Dell PowerScale F910 (OneFS) | site | verified |
+| Management | Dell OpenManage Enterprise | site | verified |
+| GPU / DPU (silicon) | NVIDIA Rubin ×72 / BlueField ×18 | — | NVIDIA |
+
 ## DSX OS baseline (v0.2.0)
 
 This emulator tracks the **NVIDIA DSX OS (2026.05)** layering: it is the physical /
@@ -168,7 +208,7 @@ cd ~/nocp && PYTHONPATH=. .venv/bin/python scripts/integrate_emulator.py   # 7 P
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 82 passed
+.venv/bin/python -m pytest tests/ -q      # 126 passed
 ```
 
 ## Layout
@@ -184,6 +224,7 @@ app/exchange.py      DSX Exchange event bus (SSE, listeners)
 app/dps.py           DPS / MaxLPS power domains, allocation, simulate, Flex
 app/oob.py           OOB state (BMC, PSU, leak, inlet, SEL) + /emulator/v1/oob
 app/redfish_oob.py   Redfish PowerSubsystem/ThermalSubsystem/SEL/PowerLimit/resets
+app/dell.py          Dell hardware identity, BOM, iDRAC alias routes
 app/main.py          FastAPI app (CORS for :8000/:8090) + dashboard + /metrics
 static/index.html    single-page dashboard
 tests/               pytest suite

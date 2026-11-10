@@ -263,7 +263,8 @@ def topology(site: Optional[str] = None):
             networks = [{
                 "name": f"Fabric-{p}",
                 "spines": [{"id": f"{sid}-fab-{p.lower()}-sp{i:02d}",
-                            "model": "Quantum-X800"}
+                            "model": "Quantum-X800",
+                            "vendor": "Dell"}
                            for i in range(1, n_sp + 1)],
                 "state": "up",
             } for p in ("A", "B")]

@@ -6,10 +6,10 @@ The resource/validation model follows NetQ's public concepts.
 Confirmed (public spec):
   - NetQ validation check categories: agents/bgp/evpn/interfaces/mlag(clag)/
     mtu/roce/vlan/vxlan, etc. (docs.nvidia.com Cumulus NetQ Validate Operations)
-  - SN5600: Spectrum-4 ASIC, 64 x 800GbE, 51.2Tb/s (nvidia.com Spectrum-X)
+  - Dell PowerSwitch SN5610: Spectrum-4 ASIC, 64 x 800GbE (dell.com; NVIDIA SN5600 equivalent)
   - RoCE monitoring metric axes: PFC pause frames, ECN marking, congestion drop
 Assumption (non-public / undetermined — arbitrary consistent values):
-  - VR NVL72 site converged Ethernet layout: 2 SN5600 spines per site +
+  - VR NVL72 site converged Ethernet layout: 2 SN5610 spines per site +
     2 leaves per SU (storage / N-S converged; the GPU fabric is handled by UFM/IB)
   - Leaf downlink is 1x800G/leaf per rack (tray aggregation, to fit 64 ports)
   - Cumulus Linux 5.x version string, MTU 9216, eBGP unnumbered underlay
@@ -27,15 +27,16 @@ from pydantic import BaseModel
 
 from .store import STORE, CLUSTER, _iso
 from . import fabric as _fabric
+from . import dell
 
 router = APIRouter(prefix="/netq/v1", tags=["netq"])
 
 TICK_SEC = 2.5
 SPINES_PER_SITE = 2                       # Assumption
 LEAVES_PER_SU = 2                         # Assumption
-MODEL = "SN5600"
+MODEL = dell.LEAF_MODEL                    # Dell PowerSwitch SN5610 (Spectrum-4)
 OS_VERSION = "Cumulus Linux 5.11"         # Assumption: arbitrary version string
-INTERFACES_TOTAL = 64                     # Confirmed: SN5600 64x800GbE
+INTERFACES_TOTAL = 64                     # Confirmed: SN5610 64x800GbE
 MTU = 9216
 CHECKS = ("bgp", "evpn", "vxlan", "mtu", "roce", "clag")
 INJECT_KINDS = ("bgp_flap", "link_down", "pfc_storm", "validation_fail")
@@ -107,6 +108,8 @@ class NetqEngine:
     def _add_switch(self, name, role, sid, su_id, racks):
         self.switches[name] = {
             "name": name, "model": MODEL, "os": OS_VERSION, "role": role,
+            "vendor": dell.HW_VENDOR, "product": dell.LEAF_PRODUCT,
+            "service_tag": dell.service_tag(name),
             "site": sid, "su_id": su_id, "racks": racks,
             "interfaces_total": INTERFACES_TOTAL, "interfaces_up": 0,
             "temperature_c": 40.0, "state": "ok", "fault": None}
