@@ -66,7 +66,8 @@ def test_create_validation(client):
 def test_generate_latency_and_usage_fields(client):
     g = _gen(client)
     assert g["prompt_tokens"] == 2000 and g["completion_tokens"] == 64
-    assert g["total_tokens"] == 2064 and g["cached_tokens"] == 0
+    assert g["total_tokens"] == 2064 and g["usage"]["prompt_tokens_details"]["cached_tokens"] == 0
+    assert "cached_tokens" not in g and "reasoning_tokens" not in g   # no flat copies
     assert 0 < g["ttft_ms"] < 2000 and 0 < g["tpot_ms"] < 50
     assert g["worker"]["prefill"].startswith(DEP + "-prefill")
     assert g["worker"]["decode"].startswith(DEP + "-decode")
@@ -74,7 +75,9 @@ def test_generate_latency_and_usage_fields(client):
     assert g["e2e_ms"] > g["ttft_ms"]
     r = client.post("/dynamo/v1/generate", json={"model": "deepseek-r1",
                                                  "prompt_tokens": 10, "max_tokens": 100})
-    assert r.json()["reasoning_tokens"] == 60 and r.json()["kv_transfer_ms"] == 0
+    u = r.json()["usage"]
+    assert u["completion_tokens_details"]["reasoning_tokens"] == 60
+    assert r.json()["kv_transfer_ms"] == 0
 
 
 def test_generate_validation(client):
@@ -91,7 +94,7 @@ def test_kv_prefix_hit_lowers_ttft(client):
     a = _gen(client, prefix_hash="sys-prompt-1", request_id="r-a")
     b = _gen(client, prefix_hash="sys-prompt-1", request_id="r-b")
     assert a["kv_hit_tokens"] == 0 and b["kv_hit_tokens"] == 2000
-    assert b["cached_tokens"] == 2000
+    assert b["usage"]["prompt_tokens_details"]["cached_tokens"] == 2000
     assert b["worker"]["decode"] == a["worker"]["decode"]   # KV-aware routing
     assert b["ttft_ms"] < a["ttft_ms"]
 
@@ -186,7 +189,8 @@ def test_metrics_prometheus(client):
                  "neocloud_dynamo_tokens_per_second_per_mw", "neocloud_dynamo_power_kw"):
         assert name in t, name
     assert (f'dynamo_frontend_requests_total{{dynamo_namespace="{DEP}",'
-            f'model="llama-3.3-70b-instruct",status="success"}} 2') in t
+            f'model="llama-3.3-70b-instruct",endpoint="generate",request_type="unary",'
+            f'status="success",error_type=""}} 2') in t
     assert (f'dynamo_component_router_kv_hit_rate{{dynamo_namespace="{DEP}",'
             f'model="llama-3.3-70b-instruct"}} 0.5') in t
 

@@ -20,7 +20,28 @@ workers out of rotation. Throughput per MW uses the same power numbers.
   POST   /dynamo/v1/generate              (stream=true → text/event-stream)
   GET    /dynamo/v1/stats?deployment=&model=&window=
   GET    /dynamo/v1/usage?since=&deployment=
-  GET    /dynamo/v1/metrics               (Prometheus text)"""
+  GET    /dynamo/v1/metrics               (Prometheus text)
+  GET    /dynamo/v1/kv-events?since=&deployment=   (KV router event feed)
+  K8s view of the same DGDs (nvidia.com/v1beta1, CRD shape):
+  GET|POST /apis/nvidia.com/v1beta1/namespaces/{ns}/dynamographdeployments
+  GET|DELETE /apis/nvidia.com/v1beta1/namespaces/{ns}/dynamographdeployments/{name}
+  GET    /apis/nvidia.com/v1beta1/dynamographdeployments
+OpenAI-compatible frontend (/v1/chat/completions, /v1/completions, /v1/models)
+lives in dynamo_frontend.py and routes through _run() below.
+
+Upstream alignment (ref/upstream/UPSTREAM-REFS.md, ai-dynamo/dynamo v1.6.2 @
+3a524d0d70f9, Apache-2.0; openai/openai-openapi 2.0.0 @ c6522b4e0c48, MIT):
+  usage        = OpenAI CompletionUsage: prompt_tokens_details.cached_tokens,
+                 completion_tokens_details.reasoning_tokens (no flat copies)
+  KV events    = lib/kv-router/src/protocols.rs RouterEvent{worker_id,
+                 storage_tier, event: KvCacheEvent{event_id, data, dp_rank}},
+                 data = {"stored": KvCacheStoreData} | {"removed":
+                 KvCacheRemoveData} | "cleared" (serde snake_case); blocks of
+                 KV_BLOCK_SIZE tokens. Hashes are crc-derived u64, not xxh3.
+  metrics      = lib/runtime/src/metrics/prometheus_names.rs (frontend_service,
+                 router); NeoCloud-only series use the neocloud_ prefix
+  DGD          = deploy/operator/config/crd/bases/nvidia.com_dynamographdeployments.yaml
+                 v1beta1 (spec.components[], status.state/conditions/components)"""
 import itertools
 import json
 import os
@@ -30,7 +51,7 @@ from collections import OrderedDict, deque
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .store import STORE, GPU_PER_TRAY, _iso
@@ -69,6 +90,10 @@ MAX_OUTPUT_TOKENS = 32768
 MAX_LOAD_RPS = 10000.0
 KV_CACHE_ENTRIES = 4096
 SAMPLES_MAX = 5000
+KV_BLOCK_SIZE = 16                # tokens per KV block (kv_block_size)
+KV_EVENTS_MAX = 5000
+DGD_API = "nvidia.com/v1beta1"
+DGD_NAMESPACE = "dynamo"
 USAGE_MAX = 10000
 PACE = float(os.environ.get("EMU_DYNAMO_PACE", "0"))   # 1.0 = real-time token pacing
 BUCKETS_S = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60)
@@ -94,6 +119,9 @@ class _Dynamo:
         self._ids = itertools.count(1)
         self._req = itertools.count(1)
         self._usage_seq = itertools.count(1)
+        self.kv_events: deque = deque(maxlen=KV_EVENTS_MAX)
+        self._kv_seq = itertools.count(1)
+        self._kv_ids: Dict[str, int] = {}
 
     def sync(self):
         cur = getattr(STORE, "seed_gen", 0)
@@ -103,6 +131,9 @@ class _Dynamo:
         self.deps, self.by_request = {}, OrderedDict()
         self.usage = deque(maxlen=USAGE_MAX)
         self._ids = itertools.count(1)
+        self.kv_events = deque(maxlen=KV_EVENTS_MAX)
+        self._kv_seq = itertools.count(1)
+        self._kv_ids = {}
         _seed()
 
 
@@ -177,7 +208,8 @@ def _create(model: str, prefill: int, decode: int, racks: List[str],
          "load_rps": float(load_rps if load_rps is not None else 2.0),
          "created_at": _iso(), "updated_at": _iso(),
          "kv": OrderedDict(), "samples": deque(maxlen=SAMPLES_MAX),
-         "counters": _new_counters(), "rr": 0}
+         "counters": _new_counters(), "rr": 0,
+         "namespace": DGD_NAMESPACE, "generation": 1, "kv_cleared": set()}
     DYN.deps[did] = d
     return d
 
@@ -289,7 +321,8 @@ def _latency(d: dict, ev: dict, prompt: int, kv_hit: int, dec_w: dict,
 
 # ── metrics bookkeeping ───────────────────────────────────────────────
 def _new_counters() -> dict:
-    return {"req": {"success": 0, "error": 0}, "in_tok": 0, "out_tok": 0,
+    # req: (endpoint, request_type, status, error_type) → count
+    return {"req": {}, "in_tok": 0, "out_tok": 0,
             "kv_hit_tok": 0, "kv_query_tok": 0,
             "h": {k: {"b": [0] * len(BUCKETS_S if k in ("ttft", "itl", "e2e")
                                      else BUCKETS_TOK), "sum": 0.0, "n": 0}
@@ -305,9 +338,11 @@ def _observe(c: dict, key: str, v: float):
     h["n"] += 1
 
 
-def _record(d: dict, ok: bool, res: Optional[dict] = None):
+def _record(d: dict, ok: bool, res: Optional[dict] = None, endpoint: str = "generate",
+            request_type: str = "unary", error_type: str = ""):
     c = d["counters"]
-    c["req"]["success" if ok else "error"] += 1
+    k = (endpoint, request_type, "success" if ok else "error", "" if ok else error_type)
+    c["req"][k] = c["req"].get(k, 0) + 1
     if not ok:
         d["samples"].append({"ts": _now(), "ok": False})
         return
@@ -331,6 +366,70 @@ def _pct(vals: List[float], p: float) -> Optional[float]:
     return round(s[min(len(s) - 1, int(round(p / 100 * (len(s) - 1))))], 3)
 
 
+# ── KV cache events (kv-router protocols.rs RouterEvent / KvCacheEvent) ─
+def _u64(s: str) -> int:
+    return _h(s) | (_h(s[::-1] + "#") << 32)
+
+
+def _block_hash(prefix: str, i: int, kind: str = "seq") -> int:
+    return _u64(f"{kind}:{prefix}:{i}")
+
+
+def _kv_emit(d: dict, worker: str, data):
+    eid = DYN._kv_ids.get(worker, 0)              # event_id is per publisher
+    DYN._kv_ids[worker] = eid + 1
+    DYN.kv_events.append({
+        "seq": next(DYN._kv_seq), "deployment": d["id"], "worker": worker, "at": _iso(),
+        "router_event": {"worker_id": _u64(worker), "storage_tier": "device",
+                         "event": {"event_id": eid, "data": data, "dp_rank": 0}}})
+
+
+def _kv_store(d: dict, prefix: str, worker: str, old: int, new: int):
+    a, b = old // KV_BLOCK_SIZE, new // KV_BLOCK_SIZE    # full blocks only
+    if b > a:
+        _kv_emit(d, worker, {"stored": {
+            "parent_hash": _block_hash(prefix, a - 1) if a else None,
+            "start_position": a,
+            "blocks": [{"block_hash": _block_hash(prefix, i),
+                        "tokens_hash": _block_hash(prefix, i, "tok"),
+                        "mm_extra_info": None} for i in range(a, b)]}})
+
+
+def _kv_remove(d: dict, prefix: str, worker: str, tokens: int):
+    n = tokens // KV_BLOCK_SIZE
+    if n:
+        _kv_emit(d, worker, {"removed": {
+            "block_hashes": [_block_hash(prefix, i) for i in range(n)]}})
+
+
+def _kv_clear(d: dict, worker: str):
+    _kv_emit(d, worker, "cleared")
+    for k in [k for k, (w, _) in d["kv"].items() if w == worker]:
+        del d["kv"][k]
+
+
+def _kv_health(d: dict, ev: dict):
+    """A KV-holding worker that drops out of rotation (XID) loses its cache:
+    publish Cleared once; it re-arms when the worker is healthy again."""
+    for w in d["workers"]:
+        if w["role"] == "prefill":
+            continue
+        if ev["ws"][w["id"]]["perf"] <= 0:
+            if w["id"] not in d["kv_cleared"]:
+                d["kv_cleared"].add(w["id"])
+                _kv_clear(d, w["id"])
+        else:
+            d["kv_cleared"].discard(w["id"])
+
+
+def usage_obj(prompt: int, cached: int, completion: int, reasoning: int) -> dict:
+    """OpenAI CompletionUsage (openapi.yaml components/schemas/CompletionUsage)."""
+    return {"prompt_tokens": prompt, "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": cached},
+            "completion_tokens_details": {"reasoning_tokens": reasoning}}
+
+
 # ── views ─────────────────────────────────────────────────────────────
 def _dep_or_404(did: str) -> dict:
     d = DYN.deps.get(did)
@@ -347,7 +446,9 @@ def _view(d: dict, ev: Optional[dict] = None) -> dict:
             "decode_workers": d["decode_workers"], "tp": d["tp"],
             "gpus": sum(len(w["gpus"]) for w in d["workers"]),
             "load_rps": d["load_rps"],
-            "workers": [{**w, "state": ev["ws"][w["id"]]["state"],
+            "namespace": d["namespace"], "generation": d["generation"],
+            "workers": [{**w, "worker_id": _u64(w["id"]),
+                         "state": ev["ws"][w["id"]]["state"],
                          "perf": round(ev["ws"][w["id"]]["perf"], 4),
                          "faults": ev["ws"][w["id"]]["faults"]}
                         for w in d["workers"]],
@@ -423,6 +524,7 @@ class GenerateBody(BaseModel):
     max_tokens: int = 256
     stream: bool = False
     prefix_hash: Optional[str] = None
+    prefix_tokens: Optional[int] = None    # cacheable prefix length (default: whole prompt)
     request_id: Optional[str] = None       # = gateway x-request-id (idempotent)
     tenant_id: Optional[str] = None
 
@@ -501,7 +603,11 @@ def patch_deployment(did: str, body: DeploymentPatch):
                 d["workers"] = old
                 raise
             d["prefill_workers"], d["decode_workers"] = pre, dec
-            d["kv"] = OrderedDict()
+            for w in old:                      # re-placed workers start cold
+                if w["role"] != "prefill":
+                    _kv_clear(d, w["id"])
+            d["kv"], d["kv_cleared"] = OrderedDict(), set()
+            d["generation"] += 1
         d["updated_at"] = _iso()
         return _view(d)
 
@@ -510,7 +616,10 @@ def patch_deployment(did: str, body: DeploymentPatch):
 def delete_deployment(did: str):
     with STORE.lock:
         DYN.sync()
-        _dep_or_404(did)
+        d = _dep_or_404(did)
+        for w in d["workers"]:
+            if w["role"] != "prefill":
+                _kv_clear(d, w["id"])
         del DYN.deps[did]
         return {"deleted": did}
 
@@ -529,8 +638,9 @@ def _resolve(body: GenerateBody) -> dict:
     return (ready or ds)[0]
 
 
-def _run(body: GenerateBody) -> dict:
+def _run(body: GenerateBody, endpoint: str = "generate") -> dict:
     """Route + compute one request; returns the result record."""
+    rtype = "stream" if body.stream else "unary"
     d = _resolve(body)
     m = MODELS[d["model"]]
     if body.prompt_tokens < 0 or body.prompt_tokens > m["context_length"]:
@@ -539,8 +649,9 @@ def _run(body: GenerateBody) -> dict:
                                        m["context_length"] - body.prompt_tokens):
         raise HTTPException(422, "max_tokens out of range for the model context")
     ev = _evaluate(d)
+    _kv_health(d, ev)
     if ev["state"] == "Unavailable":
-        _record(d, False)
+        _record(d, False, None, endpoint, rtype, "unavailable")
         raise HTTPException(503, f"deployment {d['id']} has no healthy "
                                  f"{'decode' if not ev['dec'] else 'prefill'} worker")
     rid = body.request_id or f"req-{next(DYN._req):06d}"
@@ -560,34 +671,38 @@ def _run(body: GenerateBody) -> dict:
         d["rr"] = (d["rr"] + 1) % len(ev["pre"])
         pre_w = ev["pre"][d["rr"]]
     if body.prefix_hash:
-        prev = d["kv"].get(body.prefix_hash, (None, 0))[1]
-        d["kv"][body.prefix_hash] = (dec_w["id"], max(prev, body.prompt_tokens))
+        want = body.prompt_tokens if body.prefix_tokens is None else \
+            max(0, min(body.prefix_tokens, body.prompt_tokens))
+        owner, prev = d["kv"].get(body.prefix_hash, (None, 0))
+        if owner is not None and owner != dec_w["id"]:
+            _kv_remove(d, body.prefix_hash, owner, prev)   # prefix moved worker
+            prev = 0
+        new = max(prev, want)
+        _kv_store(d, body.prefix_hash, dec_w["id"], prev, new)
+        d["kv"][body.prefix_hash] = (dec_w["id"], new)
         while len(d["kv"]) > KV_CACHE_ENTRIES:
-            d["kv"].popitem(last=False)
+            k, (w, n) = d["kv"].popitem(last=False)
+            _kv_remove(d, k, w, n)
     jitter = 0.94 + (_h(rid) % 1000) / 1000 * 0.12
     lat = _latency(d, ev, body.prompt_tokens, kv_hit, dec_w, pre_w, jitter)
     out = body.max_tokens
     reasoning = int(out * m["reasoning"])
     res = {"id": rid, "deployment": d["id"], "model": d["model"],
            "tenant_id": body.tenant_id,
-           "prompt_tokens": body.prompt_tokens, "cached_tokens": kv_hit,
-           "kv_hit_tokens": kv_hit, "completion_tokens": out,
-           "reasoning_tokens": reasoning,
-           "total_tokens": body.prompt_tokens + out, **lat,
+           "prompt_tokens": body.prompt_tokens, "kv_hit_tokens": kv_hit,
+           "completion_tokens": out, "total_tokens": body.prompt_tokens + out,
+           "usage": usage_obj(body.prompt_tokens, kv_hit, out, reasoning), **lat,
            "e2e_ms": round(lat["ttft_ms"] + lat["tpot_ms"] * (out - 1), 2),
            "worker": {"prefill": pre_w["id"] if pre_w else dec_w["id"],
                       "decode": dec_w["id"]},
            "racks": sorted({dec_w["rack"]} | ({pre_w["rack"]} if pre_w else set())),
            "perf": round(ev["ws"][dec_w["id"]]["perf"], 4),
            "finish_reason": "length", "at": _iso()}
-    _record(d, True, res)
+    _record(d, True, res, endpoint, rtype)
     DYN.usage.append({"seq": next(DYN._usage_seq), "source": "engine",
                       "request_id": rid, "deployment": d["id"], "model": d["model"],
-                      "tenant_id": body.tenant_id,
-                      "prompt_tokens": res["prompt_tokens"],
-                      "cached_tokens": kv_hit, "completion_tokens": out,
-                      "reasoning_tokens": reasoning,
-                      "total_tokens": res["total_tokens"], "at": res["at"]})
+                      "tenant_id": body.tenant_id, "endpoint": endpoint,
+                      "usage": res["usage"], "at": res["at"]})
     DYN.by_request[rid] = res
     while len(DYN.by_request) > USAGE_MAX:
         DYN.by_request.popitem(last=False)
@@ -687,7 +802,7 @@ def metrics():
         L.append("# TYPE dynamo_frontend_output_tokens_total counter")
         L.append("# TYPE dynamo_frontend_input_tokens_total counter")
         for g in ("dynamo_frontend_inflight_requests", "dynamo_frontend_queued_requests",
-                  "dynamo_component_router_kv_hit_rate", "dynamo_worker_count",
+                  "dynamo_component_router_kv_hit_rate", "neocloud_dynamo_worker_count",
                   "neocloud_dynamo_power_kw", "neocloud_dynamo_tokens_per_second",
                   "neocloud_dynamo_tokens_per_second_per_mw",
                   "neocloud_dynamo_capacity_tokens_per_second",
@@ -697,8 +812,9 @@ def metrics():
             ev = _evaluate(d)
             c = d["counters"]
             lbl = f'dynamo_namespace="{d["id"]}",model="{d["model"]}"'
-            for st, n in c["req"].items():
-                L.append(f'dynamo_frontend_requests_total{{{lbl},status="{st}"}} {n}')
+            for (ep, rt, st, et), n in sorted(c["req"].items()):
+                L.append(f'dynamo_frontend_requests_total{{{lbl},endpoint="{ep}",'
+                         f'request_type="{rt}",status="{st}",error_type="{et}"}} {n}')
             L.append(f"dynamo_frontend_output_tokens_total{{{lbl}}} {c['out_tok']}")
             L.append(f"dynamo_frontend_input_tokens_total{{{lbl}}} {c['in_tok']}")
             for name, key, b in hist:
@@ -717,8 +833,8 @@ def metrics():
                 if n:
                     healthy = sum(1 for w in d["workers"] if w["role"] == role
                                   and ev["ws"][w["id"]]["perf"] > 0)
-                    L.append(f'dynamo_worker_count{{{lbl},role="{role}",state="healthy"}} {healthy}')
-                    L.append(f'dynamo_worker_count{{{lbl},role="{role}",state="unhealthy"}} {n - healthy}')
+                    L.append(f'neocloud_dynamo_worker_count{{{lbl},role="{role}",state="healthy"}} {healthy}')
+                    L.append(f'neocloud_dynamo_worker_count{{{lbl},role="{role}",state="unhealthy"}} {n - healthy}')
             mw = ev["power_kw"] / 1000
             L.append(f"neocloud_dynamo_power_kw{{{lbl}}} {round(ev['power_kw'], 3)}")
             L.append(f"neocloud_dynamo_tokens_per_second{{{lbl}}} {round(ev['served_tps'], 2)}")
@@ -730,3 +846,158 @@ def metrics():
         L.append('dynamo_operator_resources_total{resource_type="DynamoGraphDeployment"} '
                  f"{len(DYN.deps)}")
         return "\n".join(L) + "\n"
+
+
+@router.get("/kv-events")
+def kv_events(since: int = 0, deployment: Optional[str] = None, limit: int = 500):
+    """KV router event feed: what workers publish on the kv_events subject,
+    as RouterEvent JSON (seq/deployment/worker/at are the NeoCloud envelope)."""
+    with STORE.lock:
+        DYN.sync()
+        for d in DYN.deps.values():
+            _kv_health(d, _evaluate(d))
+        rows = [e for e in DYN.kv_events if e["seq"] > since
+                and (not deployment or e["deployment"] == deployment)]
+        rows = rows[:max(1, min(limit, KV_EVENTS_MAX))]
+        return {"count": len(rows), "next": rows[-1]["seq"] if rows else since,
+                "kv_block_size": KV_BLOCK_SIZE, "events": rows}
+
+
+# ── DynamoGraphDeployment as the K8s custom resource (nvidia.com/v1beta1) ─
+k8s = APIRouter(prefix="/apis/nvidia.com/v1beta1", tags=["dynamo-dgd"])
+_COMP = {"prefill": "VllmPrefillWorker", "decode": "VllmDecodeWorker", "worker": "VllmWorker"}
+_STATE = {"Ready": "successful", "Degraded": "pending", "Unavailable": "failed"}
+
+
+def _uid(d: dict) -> str:
+    a, b = _h(d["id"]), _u64(d["id"] + d["created_at"])
+    return f"{a:08x}-{b >> 48 & 0xffff:04x}-4{b >> 36 & 0xfff:03x}-8{b >> 24 & 0xfff:03x}-{b & 0xffffff:06x}{a & 0xffffff:06x}"
+
+
+def dgd(d: dict, ev: Optional[dict] = None) -> dict:
+    """The deployment rendered as the upstream DGD custom resource."""
+    ev = ev or _evaluate(d)
+    pod = {"spec": {"containers": [{"name": "main", "resources": {
+        "limits": {"nvidia.com/gpu": str(d["tp"])}}}]}}
+    comps = [{"name": "Frontend", "type": "frontend", "replicas": 1}]
+    sc = {"Frontend": {"componentKind": "Deployment",
+                       "componentNames": [f"{d['id']}-frontend"], "replicas": 1,
+                       "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1,
+                       "gpusPerEngine": 0, "gpusPerReplica": 0}}
+    for role in (("prefill", "decode") if d["mode"] == "disagg" else ("worker",)):
+        ws = [w for w in d["workers"] if w["role"] == role]
+        ready = sum(1 for w in ws if ev["ws"][w["id"]]["perf"] > 0)
+        name = _COMP[role]
+        comps.append({"name": name, "type": role, "replicas": len(ws),
+                      "modelRef": {"name": d["model"]}, "podTemplate": pod})
+        c = {"componentKind": "Deployment", "componentNames": [f"{d['id']}-{name.lower()}"],
+             "replicas": len(ws), "updatedReplicas": len(ws), "readyReplicas": ready,
+             "availableReplicas": ready, "gpusPerEngine": d["tp"],
+             "gpusPerReplica": d["tp"], "servedModelName": d["model"]}
+        thr = [ev["racks"][w["rack"]] for w in ws if ev["racks"][w["rack"]]["throttled"]]
+        if thr:                                   # DPS cap reaches the pods
+            c["gpuPowerLimitWatts"] = max(1, int(min(r["kw_per_gpu"] for r in thr) * 1000))
+        sc[name] = c
+    st = ev["state"]
+    down = [n for n, c in sc.items() if c["readyReplicas"] < c["replicas"]]
+    cond = {"type": "Ready", "status": "True" if st == "Ready" else "False",
+            "reason": {"Ready": "AllComponentsReady", "Degraded": "ComponentsNotReady",
+                       "Unavailable": "NoHealthyWorkers"}[st],
+            "message": ("All components are ready" if st == "Ready"
+                        else "Components not ready: " + ", ".join(down)),
+            "lastTransitionTime": d["updated_at"], "observedGeneration": d["generation"]}
+    return {"apiVersion": DGD_API, "kind": "DynamoGraphDeployment",
+            "metadata": {"name": d["id"], "namespace": d["namespace"], "uid": _uid(d),
+                         "generation": d["generation"],
+                         "creationTimestamp": d["created_at"],
+                         "labels": {"nvidia.com/dynamo-model": d["model"]},
+                         "annotations": {"neocloud.io/racks": ",".join(d["racks"]),
+                                         "neocloud.io/load-rps": str(d["load_rps"])}},
+            "spec": {"backendFramework": "vllm", "components": comps},
+            "status": {"state": _STATE[st], "observedGeneration": d["generation"],
+                       "conditions": [cond], "components": sc}}
+
+
+def _status(code: int, msg: str) -> JSONResponse:
+    """K8s metav1.Status error body."""
+    reason = {400: "BadRequest", 404: "NotFound", 409: "AlreadyExists",
+              422: "Invalid", 503: "ServiceUnavailable"}.get(code, "InternalError")
+    return JSONResponse({"kind": "Status", "apiVersion": "v1", "metadata": {},
+                         "status": "Failure", "message": msg, "reason": reason,
+                         "code": code}, status_code=code)
+
+
+def _dgd_list(items: List[dict]) -> dict:
+    return {"apiVersion": DGD_API, "kind": "DynamoGraphDeploymentList",
+            "metadata": {"resourceVersion": str(DYN.seed_gen * 1000000 + len(DYN.kv_events))}, "items": items}
+
+
+@k8s.get("/dynamographdeployments")
+def dgd_list_all():
+    with STORE.lock:
+        DYN.sync()
+        return _dgd_list([dgd(d) for d in DYN.deps.values()])
+
+
+@k8s.get("/namespaces/{ns}/dynamographdeployments")
+def dgd_list(ns: str):
+    with STORE.lock:
+        DYN.sync()
+        return _dgd_list([dgd(d) for d in DYN.deps.values() if d["namespace"] == ns])
+
+
+@k8s.get("/namespaces/{ns}/dynamographdeployments/{name}")
+def dgd_get(ns: str, name: str):
+    with STORE.lock:
+        DYN.sync()
+        d = DYN.deps.get(name)
+        if d is None or d["namespace"] != ns:
+            return _status(404, f'dynamographdeployments.nvidia.com "{name}" not found')
+        return dgd(d)
+
+
+@k8s.post("/namespaces/{ns}/dynamographdeployments", status_code=201)
+def dgd_create(ns: str, body: dict):
+    """Create from a DGD manifest: components of type prefill/decode → disagg,
+    worker → agg; racks from annotation neocloud.io/racks (NeoCloud)."""
+    if body.get("apiVersion") != DGD_API or body.get("kind") != "DynamoGraphDeployment":
+        return _status(400, f"expected apiVersion {DGD_API}, kind DynamoGraphDeployment")
+    meta = body.get("metadata") or {}
+    name, ann = meta.get("name"), meta.get("annotations") or {}
+    comps = {c.get("type"): c for c in (body.get("spec") or {}).get("components") or []
+             if isinstance(c, dict)}
+    work = comps.get("decode") or comps.get("worker")
+    if not name or not work:
+        return _status(422, "metadata.name and a decode or worker component are required")
+    model = ((work.get("modelRef") or {}).get("name")
+             or ((comps.get("prefill") or {}).get("modelRef") or {}).get("name"))
+    mode = "agg" if "worker" in comps and "decode" not in comps else "disagg"
+    try:
+        load = float(ann["neocloud.io/load-rps"]) if "neocloud.io/load-rps" in ann else None
+        _check_load(load)
+        with STORE.lock:
+            DYN.sync()
+            racks = [r for r in str(ann.get("neocloud.io/racks", "")).split(",") if r] \
+                or list(STORE.racks)
+            d = _create(model or "", int((comps.get("prefill") or {}).get("replicas", 1)),
+                        int(work.get("replicas", 1)), racks, mode, name, load)
+            d["namespace"] = ns
+            d["racks"] = sorted({w["rack"] for w in d["workers"]})
+            return dgd(d)
+    except HTTPException as e:
+        return _status(e.status_code, str(e.detail))
+    except (TypeError, ValueError) as e:
+        return _status(422, str(e))
+
+
+@k8s.delete("/namespaces/{ns}/dynamographdeployments/{name}")
+def dgd_delete(ns: str, name: str):
+    with STORE.lock:
+        DYN.sync()
+        d = DYN.deps.get(name)
+        if d is None or d["namespace"] != ns:
+            return _status(404, f'dynamographdeployments.nvidia.com "{name}" not found')
+        delete_deployment(name)
+        return {"kind": "Status", "apiVersion": "v1", "metadata": {},
+                "status": "Success", "details": {"name": name, "group": "nvidia.com",
+                                                 "kind": "dynamographdeployments"}}

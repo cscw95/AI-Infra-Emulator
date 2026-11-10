@@ -1,0 +1,41 @@
+{
+ "source": "ai-dynamo/dynamo v1.6.2 @ 3a524d0d70f9 lib/kv-router/src/protocols.rs (Apache-2.0): RouterEvent, KvCacheEvent, KvCacheEventData (serde rename_all snake_case, externally tagged), KvCacheStoreData, KvCacheStoredBlockData, KvCacheRemoveData, StorageTier. Hand-transcribed from the Rust structs; u64 hashes are JSON integers.",
+ "schema": {
+  "type": "object",
+  "required": ["worker_id", "event"],
+  "properties": {
+   "worker_id": {"type": "integer", "minimum": 0},
+   "storage_tier": {"type": "string", "enum": ["device", "host_pinned", "disk", "external"]},
+   "event": {
+    "type": "object",
+    "required": ["event_id", "data"],
+    "properties": {
+     "event_id": {"type": "integer", "minimum": 0},
+     "dp_rank": {"type": "integer", "minimum": 0},
+     "data": {
+      "oneOf": [
+       {"type": "string", "enum": ["cleared"]},
+       {"type": "object", "required": ["stored"], "additionalProperties": false,
+        "properties": {"stored": {
+         "type": "object", "required": ["parent_hash", "blocks"],
+         "properties": {
+          "parent_hash": {"type": ["integer", "null"], "minimum": 0},
+          "start_position": {"type": ["integer", "null"], "minimum": 0},
+          "blocks": {"type": "array", "items": {
+           "type": "object", "required": ["block_hash", "tokens_hash"],
+           "properties": {
+            "block_hash": {"type": "integer", "minimum": 0},
+            "tokens_hash": {"type": "integer", "minimum": 0},
+            "mm_extra_info": {"type": ["object", "null"]}}}}}}}},
+       {"type": "object", "required": ["removed"], "additionalProperties": false,
+        "properties": {"removed": {
+         "type": "object", "required": ["block_hashes"],
+         "properties": {"block_hashes": {"type": "array",
+                                         "items": {"type": "integer", "minimum": 0}}}}}}
+      ]
+     }
+    }
+   }
+  }
+ }
+}
