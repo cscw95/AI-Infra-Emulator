@@ -60,6 +60,17 @@ XID_TEMP_C = 90.0
 CTRL_ACTIONS = ("power_on", "power_off", "restart", "power_cap", "power_uncap",
                 "workload", "cordon", "uncordon")
 PROFILE_UTIL = {"idle": 2.0, "steady": 52.0, "train": 77.0, "burst": 92.0}
+# DPS workload class → demo GPU util (dps.WORKLOADS util, %); "idle" stays unloaded
+DPS_UTIL = {"training": 95.0, "inference": 62.0}
+
+
+def _dps_rack_power() -> dict:
+    """DPS per-rack records (measured_kw, workload) — lazy import (dps imports us)."""
+    try:
+        from . import dps
+        return dps.all_rack_power()
+    except Exception:                        # noqa: BLE001 — twin keeps its own model
+        return {}
 RESTART_TICKS = 2                 # number of ticks a restart takes to boot
 
 
@@ -278,6 +289,10 @@ class ObsEngine:
                 busy_trays = {}
 
             # 4) materialize — per-GPU + rack aggregate (once per tick)
+            #    Rack power single source = DPS telemetry (measured_kw): the twin's
+            #    demo load follows the DPS workload class and the GPU readings are
+            #    scaled so rack IT power equals what DPS / Redfish OOB report.
+            dps_recs = _dps_rack_power()
             gpus, by_uuid, rack_agg = [], {}, {}
             tray_off_seen = []           # (tray_id, tenant, rack_off)
             tenants: Dict[str, dict] = {}
@@ -298,6 +313,9 @@ class ObsEngine:
                 profile = ctl["profile"]
                 n_gpu = len(rack.trays) * GPU_PER_TRAY
                 cap_w = (ctl["cap_kw"] * 1000.0 / n_gpu) if ctl["cap_kw"] else None
+                dps_rec = dps_recs.get(rack.rack_id)
+                dps_wl = (dps_rec or {}).get("workload")
+                rack_recs = []
                 for tid in rack.trays:
                     tray = STORE.trays[tid]
                     tenant = tray_tenant.get(tid)
@@ -314,11 +332,12 @@ class ObsEngine:
                     tray_bad = tray.health == "critical" and not no_ib
                     # load target: tenant allocation or workload profile (demo load)
                     loaded = ((tenant is not None or
-                               profile in ("steady", "train", "burst"))
+                               profile in ("steady", "train", "burst") or
+                               (not profile and dps_wl in DPS_UTIL))
                               and not no_ib and not cordoned
                               and not tray_busy and profile != "idle")
                     ubase = PROFILE_UTIL.get(profile, w["util"]) \
-                        if profile else w["util"]
+                        if profile else DPS_UTIL.get(dps_wl, w["util"])
                     for gi in range(GPU_PER_TRAY):
                         uuid = f"GPU-{tid}-g{gi}"
                         h = _crc(uuid)
@@ -400,6 +419,7 @@ class ObsEngine:
                             "telemetry_source": "none" if no_ib else "dcgm",
                         }
                         gpus.append(rec)
+                        rack_recs.append(rec)
                         by_uuid[uuid] = rec
                         power_sum += power
                         counts["total"] += 1
@@ -426,10 +446,19 @@ class ObsEngine:
                                 if offset > 3.0 and not (rack_off or cordoned):
                                     t["cooling_unavail"] += 1
                 gpu_kw = power_sum / 1000.0
+                it_kw = 0.3 if rack_off else gpu_kw + RACK_OVERHEAD_KW
+                if dps_rec and not rack_off and power_sum > 0:
+                    # same IT/GPU split as DPS rack/tray views (dps._rack_view)
+                    it_kw = dps_rec["measured_kw"]
+                    gpu_kw = max(0.0, it_kw - RACK_OVERHEAD_KW * 0.8)
+                    k = gpu_kw * 1000.0 / power_sum
+                    for g in rack_recs:
+                        if g["power_w"] is not None:
+                            g["power_w"] = round(g["power_w"] * k)
                 rack_agg[rack.rack_id] = {
                     "rack_id": rack.rack_id, "su_id": rack.su_id,
                     "site": rack.site_id, "gpu_kw": gpu_kw,
-                    "it_kw": 0.3 if rack_off else gpu_kw + RACK_OVERHEAD_KW,
+                    "it_kw": it_kw,
                     "thr": thr, "flt": flt, "alloc": alloc,
                     "tenants": rack_tenants, "offset": offset,
                     "ctl": ctl, "off": rack_off,

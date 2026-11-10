@@ -198,3 +198,24 @@ def test_alerts_include_provisioning_faults(client):
         for k in ("alert_id", "domain", "severity", "resource",
                   "summary", "at", "state"):
             assert k in a, k
+
+
+def test_rack_power_single_source_is_dps(client):
+    """Twin rack IT power == DPS measured_kw (console obs-rack / OOB / DPS agree)."""
+    _ticks(1)
+    racks = {r["rack_id"]: r for r in client.get("/emulator/v1/obs/racks").json()}
+    tele = client.get("/dps/v1/telemetry").json()["domains"]
+    dps = {r["rack_id"]: r for d in tele for g in d["groups"] for r in g["racks"]}
+    assert dps and set(dps) <= set(racks)
+    for rid, d in dps.items():
+        it = racks[rid]["it_power_kw"]
+        assert abs(it - d["measured_kw"]) <= max(0.5, d["measured_kw"] * 0.01), rid
+        assert it <= d["cap_kw"] + 0.5                 # never above the DPS cap
+    # rack power varies with the DPS workload class (heatmap is not single-colour)
+    assert max(r["it_power_kw"] for r in racks.values()) \
+        - min(r["it_power_kw"] for r in racks.values()) > 20.0
+    # GPU readings add up to the DPS IT/GPU split
+    rid = next(iter(dps))
+    gs = client.get("/emulator/v1/obs/dcgm/gpus", params={"rack": rid, "limit": 200}).json()["gpus"]
+    gsum = sum(g["power_w"] or 0 for g in gs) / 1000.0
+    assert abs(gsum - racks[rid]["gpu_power_kw"]) <= max(1.0, gsum * 0.02)
