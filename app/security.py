@@ -36,6 +36,7 @@ CORS_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 CORS_HEADERS = ["Content-Type", "Authorization", "X-API-Key", "X-Tenant-Id",
                 "X-Operator", "X-Request-Id", "Last-Event-ID", "If-Match"]
 PAGE_PARAMS = ("limit", "top", "$top", "pageSize")
+MAX_RANGES = 16
 # Always refused, even when allowlisted: cloud metadata endpoints.
 METADATA_IPS = {ipaddress.ip_address(a) for a in
                 ("169.254.169.254", "169.254.170.2", "100.100.100.200",
@@ -185,6 +186,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     return _deny(413, f"request body exceeds {max_body} bytes")
             except ValueError:
                 return _deny(400, "bad Content-Length")
+        rng = request.headers.get("range")
+        if rng and rng.count(",") >= MAX_RANGES:   # CVE-2025-62727 (FileResponse O(n^2))
+            return _deny(416, "too many byte ranges")
         max_page = int(os.environ.get("EMU_MAX_PAGE", "10000"))
         for p in PAGE_PARAMS:
             v = request.query_params.get(p)
@@ -199,7 +203,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         if off is not None and off.lstrip("-").isdigit() and int(off) < 0:
             return _deny(422, "offset must be >= 0")
 
-        path = request.url.path
+        # scope["path"], not request.url.path: Starlette < 1.0.1 lets a crafted
+        # Host header rewrite request.url.path (CVE-2026-48710)
+        path = request.scope.get("path", "")
         auth = request.headers.get("authorization", "")
         rf_user = os.environ.get("EMU_REDFISH_USER")
         rf_pass = os.environ.get("EMU_REDFISH_PASSWORD")

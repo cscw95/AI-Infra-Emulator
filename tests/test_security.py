@@ -150,3 +150,15 @@ def test_sse_timeout_and_subscriber_cap(client, monkeypatch):
     assert client.get("/exchange/v1/events?timeout_s=1").status_code == 503
     # backlog-only reads are not counted against the cap
     assert client.get("/exchange/v1/events?stream=false").status_code == 200
+
+
+def test_host_header_cannot_bypass_redfish_auth(client, monkeypatch):
+    monkeypatch.setenv("EMU_REDFISH_USER", "admin")
+    monkeypatch.setenv("EMU_REDFISH_PASSWORD", "pw")
+    r = client.get("/redfish/v1/Systems", headers={"Host": "x/redfish/../emulator"})
+    assert r.status_code in (400, 401)
+
+
+def test_range_header_cap(client):
+    r = client.get("/", headers={"Range": "bytes=" + ",".join(f"{i}-{i}" for i in range(50))})
+    assert r.status_code == 416
