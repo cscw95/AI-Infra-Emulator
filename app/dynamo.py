@@ -860,7 +860,37 @@ def metrics():
         L.append('dynamo_operator_resources_total{resource_type="DynamoGraphDeployment"} '
                  f"{len(DYN.deps)}")
         L += kvbm.metric_lines()
-        return "\n".join(L) + "\n"
+        return _exposition(L)
+
+
+def _exposition(lines: List[str]) -> str:
+    """Group samples under their `# TYPE` family and add `# HELP`, so the
+    text is valid Prometheus exposition (app/prom.lint, promtool)."""
+    types: "OrderedDict[str, str]" = OrderedDict()
+    samples: Dict[str, List[str]] = {}
+    for ln in lines:
+        if ln.startswith("# TYPE "):
+            _, _, fam, mtype = ln.split(" ", 3)
+            types.setdefault(fam, mtype)
+            samples.setdefault(fam, [])
+    fams = sorted(types, key=len, reverse=True)
+    for ln in lines:
+        if not ln or ln.startswith("#"):
+            continue
+        name = ln.split("{", 1)[0].split(" ", 1)[0]
+        fam = next((f for f in fams if name == f or (
+            types[f] == "histogram" and name in (f + "_bucket", f + "_sum", f + "_count"))), None)
+        if fam is None:
+            fam = name
+            types[fam] = "untyped"
+            samples[fam] = []
+        samples[fam].append(ln)
+    out: List[str] = []
+    for fam, mtype in types.items():
+        out.append(f"# HELP {fam} {fam.replace('_', ' ')}")
+        out.append(f"# TYPE {fam} {mtype}")
+        out += samples[fam]
+    return "\n".join(out) + "\n"
 
 
 @router.get("/kv-events")
