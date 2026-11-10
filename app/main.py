@@ -1,7 +1,7 @@
 """AI Infra Emulator — FastAPI app entrypoint (standalone, port 9100)."""
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -17,6 +17,7 @@ from . import security
 from . import dynamo, dynamo_frontend, gpufaults
 from . import flex
 from . import bringup
+from . import prom_metrics  # F26 Prometheus exposition
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -56,6 +57,7 @@ app.include_router(flex.router)
 app.include_router(bringup.cm_router)
 app.include_router(bringup.rms_router)
 app.include_router(bringup.ztp_router)
+app.include_router(prom_metrics.router)   # F26 /dcgm-exporter/{host}/metrics
 
 
 @app.get("/versions")
@@ -169,14 +171,10 @@ def reset():
 
 
 @app.get("/metrics")
-def metrics():
-    """Prometheus text exposition of DPU telemetry counters."""
-    lines = []
-    with STORE.lock:
-        for d in STORE.dpus.values():
-            for k, v in d.telemetry.items():
-                lines.append(f'{k}{{dpu="{d.dpu_id}"}} {v}')
-    return "\n".join(lines) + "\n"
+def metrics(request: Request, rack: Optional[str] = None, su: Optional[str] = None,
+            site: Optional[str] = None, collect: Optional[str] = None):
+    """Prometheus exposition (F26): DCGM GPU · rack power · CDU · DPU — app/prom_metrics.py."""
+    return prom_metrics.metrics_response(request, rack, su, site, collect)
 
 
 if STATIC.exists():
