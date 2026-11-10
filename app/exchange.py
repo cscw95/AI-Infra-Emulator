@@ -15,7 +15,7 @@ import os
 from collections import deque
 from typing import Callable, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .store import STORE, _iso
@@ -28,7 +28,10 @@ TOPICS = {
     "leak": "Cold-plate / manifold leak detection state changes",
     "grid": "DSX Flex demand-response (grid) events against a power domain",
     "health": "SEL critical entries, BMC reachability, GPU reset, AC power cycle",
+    "machine": "NICo managed-host state changes (NICO/v1/machine/{machineId}/state)",
 }
+# MQTT channel addresses accepted on POST /publish → bus topic (F12)
+_CHANNELS = (("NICO/v1/machine/", "/state", "machine"),)
 
 
 class _Bus:
@@ -87,6 +90,36 @@ def recent(topic: Optional[str] = None, since: int = 0,
         evs = [e for e in BUS.events
                if e["id"] > since and (not topic or e["topic"] in topic.split(","))]
     return evs[-limit:]
+
+
+def _bus_topic(topic: str) -> str:
+    if topic in TOPICS:
+        return topic
+    for pre, suf, name in _CHANNELS:
+        if topic.startswith(pre) and topic.endswith(suf) and len(topic) > len(pre) + len(suf):
+            return name
+    raise HTTPException(422, f"unknown topic {topic!r}; valid: {list(TOPICS)} "
+                             "or NICO/v1/machine/{machineId}/state")
+
+
+@router.post("/publish", status_code=201)
+def publish_route(body: dict = Body(...)):
+    """Peer producers (NICo) publish onto the bus: {topic, type, severity,
+    subject, data}. ``topic`` is a bus topic or an upstream MQTT channel
+    address (NICO/v1/machine/{id}/state → ``machine``). Mutations need the peer
+    API key when EMU_API_KEY is set (app.security)."""
+    topic, type_ = body.get("topic"), body.get("type")
+    if not isinstance(topic, str) or not isinstance(type_, str) or not type_:
+        raise HTTPException(422, "topic and type are required strings")
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if len(json.dumps(data)) > 65536:
+        raise HTTPException(413, "data larger than 64 KiB")
+    sev = body.get("severity") if body.get("severity") in ("info", "warning", "critical") else "info"
+    subject = str(body.get("subject") or topic)[:256]
+    bus = _bus_topic(topic)
+    resource = subject.split("/")[3] if bus == "machine" else subject
+    ev = publish(bus, type_[:128], sev, resource, {**data, "subject": subject})
+    return {"id": ev["id"], "topic": ev["topic"], "subject": subject}
 
 
 @router.get("/topics")

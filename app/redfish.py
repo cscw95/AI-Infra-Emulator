@@ -29,7 +29,7 @@ _sub_ids = itertools.count(1)
 # EventService push delivery. Categories pushed by default (contract): leak,
 # thermal, psu, sel. A subscription may narrow/extend them via
 # {"Oem": {"Nvidia": {"Categories": [...]}}} (also: power, grid, health).
-DEFAULT_PUSH_CATEGORIES = ["leak", "thermal", "psu", "sel"]
+DEFAULT_PUSH_CATEGORIES = ["leak", "thermal", "psu", "sel", "machine"]   # machine: F12 NICo state
 PUSH_SYNC = os.environ.get("AI_INFRA_PUSH_SYNC") == "1"   # tests: deliver inline
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-push")
 _SEVERITY = {"critical": "Critical", "warning": "Warning", "info": "OK"}
