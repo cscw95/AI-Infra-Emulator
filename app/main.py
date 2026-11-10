@@ -47,6 +47,7 @@ app.include_router(oob.router)
 app.include_router(exchange.router)
 app.include_router(bringup.cm_router)
 app.include_router(bringup.rms_router)
+app.include_router(bringup.ztp_router)
 
 
 @app.get("/versions")
