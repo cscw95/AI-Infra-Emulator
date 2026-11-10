@@ -18,7 +18,11 @@ It is an **independent service** (not part of NOCP) and integrates with the exis
 bash run.sh        # http://127.0.0.1:9100  (dashboard at /, OpenAPI at /docs)
 ```
 
-Uses the NOCP virtualenv by default (`~/nocp/.venv`); set `PYTHON=...` to override.
+Uses `./.venv` when present, otherwise `python3`; set `PYTHON=...` to override.
+
+```bash
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
 
 ## What it emulates
 
@@ -34,7 +38,81 @@ switch trays, power shelves, CDU).
 | **Fabric** | `/emulator/v1/fabric/...` | NVLink domain, InfiniBand P_Key partitions, Ethernet VXLAN segments, switch inventory |
 | **Scenarios** | `/emulator/v1/scenarios/...` | 5 built-in fault scenarios (design §12) |
 | **Metrics** | `/metrics` | Prometheus text exposition of DPU counters |
-| **NOCP bridge** | `/nico-bridge/...` | The exact contract NOCP's `NicoHttpAdapter` speaks |
+| **OOB (DSX)** | `/redfish/v1/Chassis/{id}/PowerSubsystem`, `ThermalSubsystem`, `LogServices/SEL`, `/emulator/v1/oob` | power shelves/PSUs, leak, inlet, SEL, AC power cycle, GPU reset, EventService push |
+| **MaxLPS / DPS** | `/dps/v1/...` | PowerDomain/ResourceGroup, static vs dynamic allocation, WPPS profiles, simulate, DSX Flex |
+| **DSX Exchange** | `/exchange/v1/...` | event bus (SSE) — power, thermal, leak, grid, health |
+
+## DSX OS baseline (v0.2.0)
+
+This emulator tracks the **NVIDIA DSX OS (2026.05)** layering: it is the physical /
+OOB plane under Provisioning (NICo v2.3 Redfish, power shelves, RMS-style AC power
+cycle) and Fleet Health (SEL, leak, thermal), and it hosts the **DSX MaxLPS** power
+layer (DPS `nvidia.dcpower.v1` shape) plus a **DSX Exchange** style event bus.
+
+### Version matrix
+
+Served at `GET /versions` and `GET /emulator/v1/versions` (same payload in all four
+NeoCloud repos):
+
+| dsx_os | nico | nvke | dps | mission_control | doca | gpu_operator | k8s | platform |
+|---|---|---|---|---|---|---|---|---|
+| 2026.05 | 2.3.0 | 0.23.1 | 0.10 | 2.5 | 3.x | AICR recipe | 1.33, 1.34 | Vera Rubin NVL72 |
+
+### New endpoints
+
+Chassis `{id}` is a compute tray (`su-1-rack-00-tray-00`) or a rack (`su-1-rack-00`).
+Trays share the rack's power-shelf busbar (6 shelves × 6 Delta 5.5 kW PSUs).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/redfish/v1/Chassis/{id}/PowerSubsystem` | capacity, allocation (cap) vs requested, PSU redundancy |
+| GET | `/redfish/v1/Chassis/{id}/PowerSubsystem/PowerSupplies[/{psu}]` | power-shelf PSUs (`PS{shelf}-PSU{n}`), output W, health |
+| GET | `/redfish/v1/Chassis/{id}/ThermalSubsystem` | inlet/GPU temperatures + `LeakDetection` (`OK\|Warning\|Critical`) |
+| GET | `/redfish/v1/Chassis/{id}/ThermalSubsystem/LeakDetection` | leak detector groups (cold plates, rack manifold, CDU branch) |
+| GET | `/redfish/v1/Chassis/{id}/Controls[/PowerLimit]` | current power limit, effective (DPS) limit, reading |
+| PATCH | `/redfish/v1/Chassis/{id}/Controls/PowerLimit` | `{"SetPoint": W}` tray or rack cap; `{"ControlMode":"Automatic"}` clears |
+| POST | `/redfish/v1/Chassis/{id}/Actions/Chassis.Reset` | `{"ResetType":"PowerCycle"}` AC power cycle (works with BMC down, restores it) |
+| GET | `/redfish/v1/Systems/{id}/LogServices[/SEL]` | log services |
+| GET | `/redfish/v1/Systems/{id}/LogServices/SEL/Entries[/{entry}]` | SEL entries (`?severity=Critical`) |
+| POST | `/redfish/v1/Systems/{id}/LogServices/SEL/Actions/LogService.ClearLog` | clear SEL |
+| POST | `/redfish/v1/Systems/{id}/Actions/GpuReset` | OOB GPU reset `{"GpuIds":[0,1]}` (needs BMC + host On) |
+| POST | `/redfish/v1/EventService/Subscriptions` | `{"Destination": url}` → events POSTed (Redfish `Event` shape). Default categories `leak, thermal, psu, sel`; override with `{"Oem":{"Nvidia":{"Categories":[...]}}}` (also `power, grid, health`). Delivery stats in `Oem.Nvidia` |
+| GET, POST | `/dps/v1/power-domains` | PowerDomain list/create (`operating_limit_kw`, `mode: static\|dynamic`, `smoothing`, `racks`) |
+| GET, PATCH | `/dps/v1/power-domains/{id}` | detail with groups / change limit, mode, smoothing (re-enforces rack caps) |
+| GET, POST | `/dps/v1/resource-groups` | groups under a domain (`racks`, `priority`, `min_kw`, `max_kw`); `?domain=` |
+| GET | `/dps/v1/profiles` | WPPS profiles `max-p, max-q, training, inference, balanced` |
+| POST | `/dps/v1/racks/{rack}/profile` | `{"profile": ...}` apply a WPPS profile to a rack |
+| GET | `/dps/v1/telemetry?domain=&rack=&gpus=` | domain/group/rack/GPU measured, cap, headroom (`rack=` or `gpus=true` adds per-GPU) |
+| POST | `/dps/v1/simulate` | `{"domain","operating_limit_kw","workload_mix":{training,inference,idle},"profile","smoothing"}` → static vs dynamic `racks_supported, gpus_supported, tokens_per_mw, headroom_kw` |
+| GET, POST | `/dps/v1/flex-events` | DSX Flex demand response `{"domain","reduce_kw","duration_s"}` lowers the effective limit for the window |
+| GET | `/emulator/v1/oob/summary?site=` | per rack `{bmc_reachable, bmc_total, psu_ok, psu_total, leak, max_inlet_c, sel_critical, power_kw, cap_kw}` + totals |
+| GET | `/emulator/v1/oob/racks/{rack}` | per-tray OOB detail + PSUs |
+| POST | `/emulator/v1/oob/inject` / `/recover` | fault injection: `leak, psu_fail, bmc_unreachable, thermal, sel_critical` |
+| GET | `/exchange/v1/topics` | topics `power, thermal, leak, grid, health` with publish counts |
+| GET | `/exchange/v1/events` | SSE stream (`?topic=a,b&since=<id>&follow=&timeout_s=`); `?stream=false` returns JSON |
+| GET | `/versions`, `/emulator/v1/versions` | version matrix |
+
+### Power model and the single cap source
+
+- Hierarchy: PowerDomain (facility OperatingLimit) > ResourceGroup > Rack > Tray > GPU.
+  Each site is seeded as one domain (`pd-gasan`, `pd-ansan`) at 80% of nameplate, with
+  one resource group per SU (`rg-su-N`), mode `static`.
+- `static`: every rack gets an equal share. `dynamic` (rack power steering): racks get
+  their demand by group priority, then leftover headroom is redistributed up to each
+  rack's nameplate. `smoothing` clips 75% of transient spikes.
+- Rack caps computed by DPS are pushed into the observability rack control state on every
+  DPS change, so DCGM/DCIM telemetry (`/emulator/v1/obs/*`) shows the same cap. Redfish
+  rack `PowerLimit` and the operator `power_cap` action are kept as manual caps that
+  bound the DPS allocation. NOCP should write caps here (AI-Infra is the source of truth).
+- Numbers are emulator assumptions (Rubin board power 1.3 kW, rack overhead 24 kW), not
+  vendor figures.
+
+### Events
+
+Every OOB/DPS change is published on the Exchange bus; the Redfish EventService
+dispatcher listens to the bus and POSTs matching events to subscribers (thread pool,
+3 s timeout; set `AI_INFRA_PUSH_SYNC=1` for inline delivery). CDU faults from
+`/emulator/v1/obs/dlc/cdus/{id}/inject` are mirrored to the `leak` / `thermal` topics.
 
 ## Built-in fault scenarios (design §12)
 
@@ -81,7 +159,7 @@ cd ~/nocp && PYTHONPATH=. .venv/bin/python scripts/integrate_emulator.py   # 7 P
 ## Tests
 
 ```bash
-~/nocp/.venv/bin/python -m pytest tests/ -q      # 19 passed
+.venv/bin/python -m pytest tests/ -q      # 82 passed
 ```
 
 ## Layout
@@ -93,8 +171,10 @@ app/dpu.py           DPU isolation API + isolation engine
 app/redfish.py       Redfish BMC emulator
 app/provisioning.py  DHCP / PXE / DNS + boot state machine
 app/fabric.py        NVLink / InfiniBand / Ethernet
-app/scenarios.py     fault scenario engine (5 built-in)
-app/bridge.py        NOCP NicoHttpAdapter-compatible bridge
+app/exchange.py      DSX Exchange event bus (SSE, listeners)
+app/dps.py           DPS / MaxLPS power domains, allocation, simulate, Flex
+app/oob.py           OOB state (BMC, PSU, leak, inlet, SEL) + /emulator/v1/oob
+app/redfish_oob.py   Redfish PowerSubsystem/ThermalSubsystem/SEL/PowerLimit/resets
 app/main.py          FastAPI app (CORS for :8000/:8090) + dashboard + /metrics
 static/index.html    single-page dashboard
 tests/               pytest suite
@@ -108,4 +188,4 @@ tests/               pytest suite
   fault semantics) that such a layer would expose.
 - Not yet modeled (design backlog): real DOCA Flow offload, OVS/OVN datapath, SPDM
   measured-boot attestation depth, per-rack fleet scale-out, Redfish EventService push
-  delivery.
+  delivery (now implemented, see DSX OS baseline).
