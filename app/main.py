@@ -15,6 +15,7 @@ from . import trayops
 from . import exchange, dps, oob, redfish_oob
 from . import security
 from . import dynamo, dynamo_frontend, gpufaults
+from . import flex
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -50,6 +51,7 @@ app.include_router(dynamo.k8s)
 app.include_router(dynamo_frontend.router)
 app.include_router(dynamo.kvbm.router)
 app.include_router(gpufaults.router)
+app.include_router(flex.router)
 
 
 @app.get("/versions")
