@@ -7,18 +7,84 @@ machine is delegated to STORE.set_power / STORE.power_state.
 
 Router is mounted at prefix /redfish/v1 by app.main."""
 import itertools
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, Tuple
 
+import httpx
 from fastapi import APIRouter, HTTPException
 
 from .store import STORE, _iso
 from . import models as m
+from . import exchange
 
 router = APIRouter(prefix="/redfish/v1", tags=["redfish"])
 
 # EventService subscriptions live for the process lifetime (design DPU-RF-*).
 _SUBSCRIPTIONS: Dict[str, dict] = {}
 _sub_ids = itertools.count(1)
+
+# EventService push delivery. Categories pushed by default (contract): leak,
+# thermal, psu, sel. A subscription may narrow/extend them via
+# {"Oem": {"Nvidia": {"Categories": [...]}}} (also: power, grid, health).
+DEFAULT_PUSH_CATEGORIES = ["leak", "thermal", "psu", "sel"]
+PUSH_SYNC = os.environ.get("AI_INFRA_PUSH_SYNC") == "1"   # tests: deliver inline
+_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-push")
+_SEVERITY = {"critical": "Critical", "warning": "Warning", "info": "OK"}
+
+
+def _http_post(url: str, payload: dict):
+    httpx.post(url, json=payload, timeout=3.0).raise_for_status()
+
+
+def _redfish_event(ev: dict, sub: dict) -> dict:
+    origin = ev["data"].get("@odata.id") or f"/redfish/v1/Chassis/{ev['resource']}"
+    return {
+        "@odata.type": "#Event.v1_7_0.Event",
+        "Id": str(ev["id"]), "Name": "NeoCloud AI-Infra Event",
+        "Context": sub.get("Context", ""),
+        "Events": [{
+            "EventType": "Alert", "EventId": str(ev["id"]),
+            "EventTimestamp": ev["at"],
+            "Severity": _SEVERITY.get(ev["severity"], "OK"),
+            "MessageSeverity": _SEVERITY.get(ev["severity"], "OK"),
+            "Message": f"{ev['type']} on {ev['resource']}",
+            "MessageId": f"NeoCloudEmulator.1.0.{ev['type']}",
+            "MessageArgs": [ev["resource"]],
+            "OriginOfCondition": {"@odata.id": origin},
+            "Oem": {"Nvidia": {"Category": ev["category"], "Topic": ev["topic"],
+                               "Data": ev["data"]}},
+        }],
+    }
+
+
+def _deliver(sub: dict, payload: dict):
+    stats = sub["Oem"]["Nvidia"]
+    try:
+        _http_post(sub["Destination"], payload)
+        stats["Delivered"] += 1
+    except Exception as e:                     # destination down / non-2xx
+        stats["Failed"] += 1
+        stats["LastError"] = f"{type(e).__name__}: {e}"[:200]
+
+
+def _push(ev: dict):
+    """Exchange listener: push matching events to every subscription."""
+    for sub in list(_SUBSCRIPTIONS.values()):
+        dest = sub.get("Destination") or ""
+        if not dest.startswith(("http://", "https://")):
+            continue
+        cats = sub["Oem"]["Nvidia"]["Categories"]
+        if ev["category"] not in cats and ev["topic"] not in cats:
+            continue
+        payload = _redfish_event(ev, sub)
+        if PUSH_SYNC:
+            _deliver(sub, payload)
+        else:
+            _POOL.submit(_deliver, sub, payload)
+
+
+exchange.add_listener(_push)
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -84,6 +150,8 @@ def _system_view(tray) -> dict:
             "Chassis": [{"@odata.id": f"/redfish/v1/Chassis/{tray.tray_id}"}],
             "ManagedBy": [{"@odata.id": f"/redfish/v1/Managers/{tray.tray_id}"}],
         },
+        "LogServices": {"@odata.id":
+                        f"/redfish/v1/Systems/{tray.tray_id}/LogServices"},
         "Actions": {
             "#ComputerSystem.Reset": {
                 "target": f"/redfish/v1/Systems/{tray.tray_id}"
@@ -91,7 +159,9 @@ def _system_view(tray) -> dict:
                 "ResetType@Redfish.AllowableValues":
                     ["On", "ForceOff", "GracefulShutdown", "ForceRestart",
                      "GracefulRestart"],
-            }
+            },
+            "#GpuReset": {"target": f"/redfish/v1/Systems/{tray.tray_id}"
+                                    "/Actions/GpuReset"},
         },
         "Oem": {"Nvidia": {
             "ComputeTrayId": tray.tray_id,
@@ -327,6 +397,9 @@ def chassis_collection():
 @router.get("/Chassis/{tray_id}")
 def chassis(tray_id: str):
     with STORE.lock:
+        if tray_id in STORE.racks:             # rack-level chassis (power shelves)
+            from .redfish_oob import rack_chassis_view
+            return rack_chassis_view(tray_id)
         tray = _tray(tray_id)
         idx = _tray_idx(tray_id)
         watts = _tray_power_watts(tray)
@@ -348,6 +421,16 @@ def chassis(tray_id: str):
                         f"/redfish/v1/Chassis/{tray_id}/Sensors"},
             "EnvironmentMetrics": {"@odata.id":
                         f"/redfish/v1/Chassis/{tray_id}/EnvironmentMetrics"},
+            "PowerSubsystem": {"@odata.id":
+                        f"/redfish/v1/Chassis/{tray_id}/PowerSubsystem"},
+            "ThermalSubsystem": {"@odata.id":
+                        f"/redfish/v1/Chassis/{tray_id}/ThermalSubsystem"},
+            "Controls": {"@odata.id":
+                        f"/redfish/v1/Chassis/{tray_id}/Controls"},
+            "Actions": {"#Chassis.Reset": {
+                "target": f"/redfish/v1/Chassis/{tray_id}/Actions/Chassis.Reset",
+                "ResetType@Redfish.AllowableValues":
+                    ["PowerCycle", "On", "ForceOff", "ForceRestart"]}},
             "Links": {
                 "ComputerSystems": [{"@odata.id":
                     f"/redfish/v1/Systems/{tray_id}"}],
@@ -601,6 +684,10 @@ def create_subscription(body: dict):
             "SubscriptionType": body.get("SubscriptionType", "RedfishEvent"),
             "Status": {"State": "Enabled", "Health": "OK"},
             "CreatedAt": _iso(),
+            "Oem": {"Nvidia": {
+                "Categories": list(((body.get("Oem") or {}).get("Nvidia") or {})
+                                   .get("Categories") or DEFAULT_PUSH_CATEGORIES),
+                "Delivered": 0, "Failed": 0, "LastError": None}},
         }
         _SUBSCRIPTIONS[sid] = sub
         STORE.event("info", "NeoCloudEmulator.1.0.EventSubscriptionCreated",

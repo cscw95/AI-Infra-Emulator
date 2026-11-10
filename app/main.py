@@ -13,7 +13,7 @@ from . import ufm, netq
 from . import vast, converged
 from . import observability
 from . import trayops
-from . import exchange, dps
+from . import exchange, dps, oob, redfish_oob
 
 STATIC = Path(__file__).parent.parent / "static"
 
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(dpu.router)
 app.include_router(redfish.router)
+app.include_router(redfish_oob.router)
 app.include_router(provisioning.router)
 app.include_router(fabric.router)
 app.include_router(observability.router)
@@ -42,6 +43,7 @@ app.include_router(vast.router)
 app.include_router(converged.router)
 app.include_router(trayops.router)
 app.include_router(dps.router)
+app.include_router(oob.router)
 app.include_router(exchange.router)
 
 
